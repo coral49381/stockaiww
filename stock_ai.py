@@ -31,7 +31,7 @@ def init_session_state():
     if 'sector_rotation' not in st.session_state:
         st.session_state.sector_rotation = pd.DataFrame()
     if 'last_update' not in st.session_state:
-        st.session_state.last_update = datetime.now() - timedelta(h datetime.now() - timedelta(hours=1)
+        st.session_state.last_update = datetime.now() - timedelta(hours=1)
 
 # DeepSeek API交互
 def deepseek_chat(prompt, context=""):
@@ -43,7 +43,6 @@ def deepseek_chat(prompt, context=""):
     # 构建市场上下文
     market_context = f"""
     ## 当前市场状态
-    - 时间:市场状态
     - 时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
     - 市场情绪: {st.session_state.market_sentiment}
     - 热点板块: {", ".join(st.session_state.hot_sectors[:3]) if st.session_state.hot_sectors else "暂无"}
@@ -93,7 +92,6 @@ def get_stock_data(stock_code, start_date, end_date):
         return pd.DataFrame()
 
 # 板块资金流向
-def get_sector_f资金流向
 def get_sector_fund_flow(days=3):
     try:
         all_data = []
@@ -188,7 +186,7 @@ def analyze_sector_rotation(sector_data):
     if len(pivot_df.columns) > 1:
         pivot_df['trend'] = pivot_df.iloc[:, -1] - pivot_df.iloc[:, 0]
         pivot_df['momentum'] = pivot_df.iloc[:, -1] / pivot_df.iloc[:, 0].abs().replace(0, 1)
-        pivot_df['score'] = pivot_df['trend'] * pivot_df['momenttrend'] * pivot_df['momentum']
+        pivot_df['score'] = pivot_df['trend'] * pivot_df['momentum']
     
     return pivot_df.sort_values('score', ascending=False) if 'score' in pivot_df.columns else pivot_df
 
@@ -203,7 +201,6 @@ def enhanced_technical_analysis(df):
     df['MA60'] = df['close'].rolling(window=60).mean()
     
     # MACD
-    df['MACD'],D
     df['MACD'], df['MACD_signal'], _ = talib.MACD(df['close'])
     
     # RSI
@@ -229,7 +226,7 @@ def generate_trade_signals(df):
     signals['trend'] = "上升" if latest['close'] > latest['MA20'] > latest['MA60'] else "下降"
     
     # MACD信号
-    signals['macd'] = "金叉" if latest['MACD'] > latest['MACD_signal'] else "死叉D_signal'] else "死叉"
+    signals['macd'] = "金叉" if latest['MACD'] > latest['MACD_signal'] else "死叉"
     
     # RSI信号
     if latest['RSI'] > 70:
@@ -311,14 +308,14 @@ def generate_market_report():
     
     # 热点板块
     if st.session_state.hot_sectors:
-        report += "### 🔥 热点板块\n"
+        report += "###  🔥 热点板块\n"
         for sector in st.session_state.hot_sectors[:5]:
             report += f"- {sector}\n"
         report += "\n"
     
     # 板块轮动分析
     if not st.session_state.sector_rotation.empty:
-        report += "### 🔄 板块轮动趋势\n"
+        report += "###  🔄 板块轮动趋势\n"
         report += "| 板块 | 资金趋势 | 动量 | 轮动得分 |\n"
         report += "|------|----------|------|----------|\n"
         
@@ -424,9 +421,7 @@ def main():
     with col1:
         # 市场全景分析
         if st.button("🌐 生成市场全景报告", use_container_width=True):
-            market_report = generate_width=True):
             market_report = generate_market_report()
-            st.markdown_market_report()
             st.markdown(market_report)
             
             # AI分析总结
@@ -439,7 +434,6 @@ def main():
         # 自选股分析
         if hasattr(st.session_state, 'analyze_watchlist') and st.session_state.analyze_watchlist:
             st.subheader("📊 自选股分析结果")
-📊 自选股分析结果")
             
             for stock_code in st.session_state.watchlist:
                 with st.expander(f"股票分析: {stock_code}", expanded=True):
@@ -518,7 +512,7 @@ def main():
                         
                         # AI分析
                         with st.spinner("🤖 生成AI分析报告..."):
-                            prompt = f"分析股票{stock_code}的技术面和买卖点，当前价格{analysis_data.iloc[-1]['close']}，oc[-1]['close']}，给出具体操作建议"
+                            prompt = f"分析股票{stock_code}的技术面和买卖点，当前价格{analysis_data.iloc[-1]['close']}，给出具体操作建议"
                             ai_analysis = deepseek_chat(prompt)
                             st.subheader("💡 AI专业分析")
                             st.write(ai_analysis)
@@ -534,17 +528,15 @@ def main():
         # 显示市场情绪
         st.markdown(f"### 市场情绪\n**{st.session_state.market_sentiment}**")
         
-        # 显示热点**")
-        
         # 显示热点板块
         if st.session_state.hot_sectors:
-            st.markdown("### 🔥 热点板块")
+            st.markdown("###  🔥 热点板块")
             for sector in st.session_state.hot_sectors[:5]:
                 st.info(f"- {sector}")
         
         # 显示龙头股
         if not st.session_state.leading_stocks.empty:
-            st.markdown("### 🚀 今日龙头股")
+            st.markdown("###  今日龙头股")
             
             # 显示前5只龙头股
             for i, row in st.session_state.leading_stocks.head(5).iterrows():
@@ -566,7 +558,7 @@ def main():
         
         # 板块轮动排名
         if not st.session_state.sector_rotation.empty:
-            st.markdown("### 🔄 板块轮动排名")
+            st.markdown("###  🔄 板块轮动排名")
             
             # 显示前5名板块
             for idx, row in st.session_state.sector_rotation.head(5).iterrows():
