@@ -5,6 +5,7 @@ import requests
 import pandas as pd
 import akshare as ak
 import streamlit as st
+import numpy as np
 from datetime import datetime, timedelta
 
 # 获取当前时间
@@ -14,7 +15,7 @@ current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 PROXY_SETTINGS = None
 
 # 全局请求设置
-REQUEST_TIMEOUT = 30
+REQUEST_TIMEOUT = 45  # 增加超时时间
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 
@@ -40,16 +41,18 @@ def robust_request(url, method='get', params=None, json=None, headers=None):
             response.raise_for_status()
             return response
         except (requests.exceptions.RequestException, requests.exceptions.Timeout) as e:
-            st.error(f"请求失败 (尝试 {attempt+1}/{MAX_RETRIES}): {str(e)}")
+            error_msg = f"请求失败 (尝试 {attempt+1}/{MAX_RETRIES}): {str(e)}"
+            st.error(error_msg)
             
-            # 如果是代理错误，建议用户检查代理设置
-            if "ProxyError" in str(e) and PROXY_SETTINGS:
+            # 特定错误处理
+            if "Read timed out" in str(e):
+                st.warning("API响应超时，可能是网络问题或服务器繁忙")
+            elif "ProxyError" in str(e) and PROXY_SETTINGS:
                 st.error("代理连接失败！请检查代理设置或尝试禁用代理。")
             
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_DELAY)
             else:
-                st.error(f"API请求失败: {str(e)}")
                 return None
     return None
 
@@ -82,23 +85,21 @@ def get_stock_data(stock_code, start_date, end_date):
 def get_sector_fund_flow():
     """获取行业板块资金流向"""
     try:
-        sector_df = ak.stock_sector_fund_flow_hist(industry="全部")
-        sector_df = sector_df.sort_values("净额", ascending=False)
-        return sector_df.head(10)  # 返回资金流入最多的前十板块
+        # 新版本AKShare接口
+        sector_df = ak.stock_sector_fund_flow_rank(indicator="今日")
+        
+        # 确保有"净额"列
+        if "净额" not in sector_df.columns and "主力净流入-净额" in sector_df.columns:
+            sector_df["净额"] = sector_df["主力净流入-净额"]
+        
+        if "净额" in sector_df.columns:
+            sector_df = sector_df.sort_values("净额", ascending=False)
+            return sector_df.head(10)
+        else:
+            st.error("板块资金流向数据中缺少'净额'列")
+            return None
     except Exception as e:
         st.error(f"获取板块资金流向失败: {str(e)}")
-        return None
-
-# 获取热门概念板块
-def get_hot_concepts():
-    """获取热门概念板块"""
-    try:
-        concept_df = ak.stock_board_concept_hist_em()
-        # 按涨幅排序
-        concept_df = concept_df.sort_values("涨跌幅", ascending=False)
-        return concept_df.head(10)  # 返回涨幅最大的前十概念
-    except Exception as e:
-        st.error(f"获取概念板块失败: {str(e)}")
         return None
 
 # 获取龙头股信息
@@ -106,9 +107,25 @@ def get_leading_stocks():
     """获取各板块龙头股"""
     try:
         # 获取涨停股
-        limit_up = ak.stock_zt_pool_em(date=datetime.now().strftime("%Y%m%d"))
-        limit_up = limit_up.sort_values("最新涨跌幅", ascending=False)
-        return limit_up.head(10)  # 返回涨幅最大的前十涨停股
+        date_str = datetime.now().strftime("%Y%m%d")
+        limit_up = ak.stock_zt_pool_em(date=date_str)
+        
+        # 使用正确的列名 "涨跌幅"
+        if "涨跌幅" in limit_up.columns:
+            limit_up = limit_up.sort_values("涨跌幅", ascending=False)
+        elif "最新涨跌幅" in limit_up.columns:  # 兼容旧版本
+            limit_up = limit_up.sort_values("最新涨跌幅", ascending=False)
+        else:
+            # 尝试找到涨跌幅列
+            for col in limit_up.columns:
+                if "涨" in col and "幅" in col:
+                    limit_up = limit_up.sort_values(col, ascending=False)
+                    break
+            else:
+                # 默认按第4列排序
+                limit_up = limit_up.sort_values(limit_up.columns[3], ascending=False)
+        
+        return limit_up.head(10)
     except Exception as e:
         st.error(f"获取龙头股失败: {str(e)}")
         return None
@@ -137,7 +154,7 @@ def enhanced_analyze_stock(df):
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).fillna(0).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).fillna(0).rolling(window=14).mean()
-        rs = gain / (loss + 1e-10)  # 防止除以零
+        rs = gain / (loss + 1e-10)
         df['RSI'] = 100 - (100 / (1 + rs))
         
         # 计算布林带
@@ -161,6 +178,12 @@ def enhanced_analyze_stock(df):
         df['GoldenCross'] = (df['MACD'] > df['Signal']) & (df['MACD'].shift(1) < df['Signal'].shift(1))
         df['DeathCross'] = (df['MACD'] < df['Signal']) & (df['MACD'].shift(1) > df['Signal'].shift(1))
         
+        # 记录信号发生的日期
+        df['BuySignalDate'] = None
+        df['SellSignalDate'] = None
+        df.loc[df['GoldenCross'], 'BuySignalDate'] = df['date']
+        df.loc[df['DeathCross'], 'SellSignalDate'] = df['date']
+        
         return df.tail(30)  # 返回最近30天数据
     except Exception as e:
         st.error(f"技术分析失败: {str(e)}")
@@ -174,6 +197,8 @@ def generate_technical_report(analysis_data):
     
     last_row = analysis_data.iloc[-1]
     report = f"### 技术分析报告\n\n"
+    report_date = last_row['date'].strftime('%Y-%m-%d')
+    report += f"**最后交易日**: {report_date}\n\n"
     
     # 趋势判断
     report += f"**趋势分析**:\n"
@@ -190,9 +215,9 @@ def generate_technical_report(analysis_data):
     report += f"- DIF值: {last_row['MACD']:.4f}, DEA值: {last_row['Signal']:.4f}\n"
     
     if last_row['GoldenCross']:
-        report += "- ✅ MACD金叉形成，买入信号\n"
+        report += f"- ✅ MACD金叉形成（{report_date}），买入信号\n"
     elif last_row['DeathCross']:
-        report += "- ⛔ MACD死叉形成，卖出信号\n"
+        report += f"- ⛔ MACD死叉形成（{report_date}），卖出信号\n"
     
     if last_row['Histogram'] > 0:
         report += "- MACD柱状线在0轴上方，多头力量占优\n"
@@ -232,6 +257,18 @@ def generate_technical_report(analysis_data):
     elif last_row['VolumeChange'] < -0.3:
         report += "- ⚠️ 成交量明显萎缩，市场参与度降低\n"
     
+    # 显示最近买卖信号
+    buy_signals = analysis_data[analysis_data['BuySignalDate'].notnull()]
+    sell_signals = analysis_data[analysis_data['SellSignalDate'].notnull()]
+    
+    if not buy_signals.empty:
+        last_buy = buy_signals.iloc[-1]['date'].strftime('%Y-%m-%d')
+        report += f"\n**最近买入信号**: {last_buy}\n"
+    
+    if not sell_signals.empty:
+        last_sell = sell_signals.iloc[-1]['date'].strftime('%Y-%m-%d')
+        report += f"**最近卖出信号**: {last_sell}\n"
+    
     return report
 
 # 生成买卖点建议
@@ -241,6 +278,7 @@ def generate_trade_recommendation(analysis_data, sector_data, leading_stocks):
         return "无有效数据生成建议"
     
     last_row = analysis_data.iloc[-1]
+    report_date = last_row['date'].strftime('%Y-%m-%d')
     recommendation = ""
     
     # 买点判断逻辑
@@ -248,47 +286,52 @@ def generate_trade_recommendation(analysis_data, sector_data, leading_stocks):
     
     # 1. 技术面信号
     if last_row['GoldenCross']:
-        buy_signals.append("MACD金叉")
+        buy_signals.append(f"MACD金叉（{report_date}）")
     if last_row['RSI'] < 35:
-        buy_signals.append("RSI超卖")
+        buy_signals.append(f"RSI超卖（{report_date}）")
     if last_row['close'] < last_row['LowerBand']:
-        buy_signals.append("布林带下轨支撑")
+        buy_signals.append(f"布林带下轨支撑（{report_date}）")
     if last_row['VolumeChange'] > 0.5 and last_row['close'] > last_row['open']:
-        buy_signals.append("放量上涨")
+        buy_signals.append(f"放量上涨（{report_date}）")
     
     # 2. 板块热点
-    # 这里需要更复杂的逻辑匹配股票所属板块
-    # 简化版：如果板块热度高，增加买入权重
     if sector_data is not None and not sector_data.empty:
         buy_signals.append("所属板块资金流入")
     
     # 3. 市场情绪 - 龙头股表现
     if leading_stocks is not None and not leading_stocks.empty:
-        avg_change = leading_stocks['最新涨跌幅'].mean()
-        if avg_change > 3:
-            buy_signals.append("市场情绪高涨")
+        # 尝试获取涨跌幅列
+        change_col = None
+        for col in ['涨跌幅', '涨幅', '最新涨跌幅']:
+            if col in leading_stocks.columns:
+                change_col = col
+                break
+        
+        if change_col:
+            avg_change = leading_stocks[change_col].mean()
+            if avg_change > 3:
+                buy_signals.append("市场情绪高涨")
     
     # 卖点判断逻辑
     sell_signals = []
     
     # 1. 技术面信号
     if last_row['DeathCross']:
-        sell_signals.append("MACD死叉")
+        sell_signals.append(f"MACD死叉（{report_date}）")
     if last_row['RSI'] > 70:
-        sell_signals.append("RSI超买")
+        sell_signals.append(f"RSI超买（{report_date}）")
     if last_row['close'] > last_row['UpperBand']:
-        sell_signals.append("布林带上轨压力")
+        sell_signals.append(f"布林带上轨压力（{report_date}）")
     if last_row['VolumeChange'] > 0.5 and last_row['close'] < last_row['open']:
-        sell_signals.append("放量下跌")
+        sell_signals.append(f"放量下跌（{report_date}）")
     
     # 2. 板块资金流出
-    # 简化版：如果板块热点消退，增加卖出信号
     if sector_data is None or sector_data.empty:
         sell_signals.append("所属板块资金流出")
     
-    # 3. 急拉信号 - 短期大幅上涨
+    # 3. 急拉信号
     if (last_row['close'] - last_row['open']) / last_row['open'] > 0.07:
-        sell_signals.append("单日急涨")
+        sell_signals.append(f"单日急涨（{report_date}）")
     
     # 综合判断
     if buy_signals and not sell_signals:
@@ -321,7 +364,7 @@ def advanced_ai_analysis(stock_data, sector_data, leading_stocks, user_query):
         data_summary += f"### 板块资金流向:\n{sector_data.head(3).to_string()}\n\n"
     
     if leading_stocks is not None and not leading_stocks.empty:
-        data_summary += f"### 龙头股表现:\n{leading_stocks[['股票名称', '最新涨跌幅']].head(3).to_string()}\n\n"
+        data_summary += f"### 龙头股表现:\n{leading_stocks.head(3).to_string()}\n\n"
     
     # 准备请求数据
     prompt = f"""
@@ -374,40 +417,6 @@ def advanced_ai_analysis(stock_data, sector_data, leading_stocks, user_query):
     except Exception as e:
         return f"获取AI推荐失败: {str(e)}"
 
-# 绘制简化图表
-def plot_simplified_chart(df, stock_code):
-    """使用Streamlit内置图表绘制简化版K线图"""
-    if df is None or df.empty:
-        return
-    
-    st.subheader(f"{stock_code} 价格走势")
-    
-    # 价格图表
-    price_df = df.set_index('date')[['close', 'MA5', 'MA20', 'UpperBand', 'LowerBand']]
-    price_df.columns = ['收盘价', '5日均线', '20日均线', '布林带上轨', '布林带下轨']
-    st.line_chart(price_df)
-    
-    # MACD图表
-    st.subheader("MACD指标")
-    macd_df = df.set_index('date')[['MACD', 'Signal', 'Histogram']]
-    macd_df.columns = ['DIF', 'DEA', 'MACD柱']
-    st.area_chart(macd_df[['DIF', 'DEA']])
-    st.bar_chart(macd_df['MACD柱'])
-    
-    # 成交量
-    st.subheader("成交量")
-    volume_df = df.set_index('date')['volume']
-    st.bar_chart(volume_df)
-    
-    # 买卖点标记
-    buy_points = df[df['GoldenCross']]
-    sell_points = df[df['DeathCross']]
-    
-    if not buy_points.empty:
-        st.success(f"发现 {len(buy_points)} 个买入信号点")
-    if not sell_points.empty:
-        st.warning(f"发现 {len(sell_points)} 个卖出信号点")
-
 # Streamlit应用界面
 def main():
     global PROXY_SETTINGS
@@ -443,12 +452,9 @@ def main():
         
         # 代理设置选项
         st.subheader("网络设置")
-        use_proxy = st.checkbox("启用代理", value=False)  # 默认禁用代理
-        
-        # 代理地址输入
+        use_proxy = st.checkbox("启用代理", value=False)
         proxy_address = st.text_input("代理地址 (格式: http://ip:port)", "http://127.0.0.1:7890")
         
-        # 更新代理设置
         if use_proxy:
             PROXY_SETTINGS = {
                 'http': proxy_address,
@@ -459,7 +465,6 @@ def main():
             PROXY_SETTINGS = None
             st.info("不使用代理")
         
-        # 常见代理端口参考
         st.markdown("### 常见代理端口")
         st.markdown("""
         - Clash: `7890`
@@ -505,14 +510,11 @@ def main():
     
     # 用户输入
     if prompt := st.chat_input("请输入股票代码或选股策略..."):
-        # 添加到消息历史
         st.session_state.messages.append({"role": "user", "content": prompt})
         
-        # 显示用户消息
         with st.chat_message("user"):
             st.markdown(prompt)
         
-        # 判断输入类型
         stock_pattern = r'(\d{6})'
         matches = re.findall(stock_pattern, prompt)
         
@@ -532,12 +534,10 @@ def main():
         else:
             response = "正在分析市场情况..."
         
-        # 显示初始响应
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
             message_placeholder.markdown(response)
             
-            # 如果是具体指令，执行详细分析
             if hasattr(st.session_state, 'current_stock'):
                 with st.spinner("获取股票数据中..."):
                     stock_data = get_stock_data(
@@ -547,24 +547,16 @@ def main():
                     )
                 
                 if stock_data is not None and not stock_data.empty:
-                    # 增强技术分析
                     with st.spinner("技术分析中..."):
                         analysis_data = enhanced_analyze_stock(stock_data.copy())
                     
                     if analysis_data is not None:
-                        # 板块数据
                         sector_data = st.session_state.get('sector_data', None)
-                        
-                        # 龙头股数据
                         leading_stocks = st.session_state.get('leading_stocks', None)
                         
-                        # 生成技术报告
                         tech_report = generate_technical_report(analysis_data)
-                        
-                        # 生成买卖点建议
                         trade_recommendation = generate_trade_recommendation(analysis_data, sector_data, leading_stocks)
                         
-                        # 高级AI分析
                         with st.spinner("AI深度分析中..."):
                             ai_analysis = advanced_ai_analysis(
                                 analysis_data, 
@@ -573,23 +565,21 @@ def main():
                                 f"请分析股票{st.session_state.current_stock}的投资机会"
                             )
                         
-                        # 绘制图表
-                        plot_simplified_chart(analysis_data, st.session_state.current_stock)
+                        # 绘制基础K线图
+                        st.subheader(f"{st.session_state.current_stock} 价格走势")
+                        st.line_chart(analysis_data.set_index('date')['close'])
                         
-                        # 组合最终响应
                         full_response = f"## {st.session_state.current_stock} 深度分析报告\n\n"
                         full_response += f"### 💡 买卖点建议\n{trade_recommendation}\n\n"
                         full_response += tech_report + "\n\n"
                         full_response += f"### 🤖 AI专业分析\n{ai_analysis}\n\n"
                         
-                        # 更新消息
                         message_placeholder.markdown(full_response)
                     else:
                         message_placeholder.error("技术分析失败")
                 else:
                     message_placeholder.error("股票数据获取失败")
         
-        # 保存助手响应
         st.session_state.messages.append({"role": "assistant", "content": response})
 
 if __name__ == "__main__":
