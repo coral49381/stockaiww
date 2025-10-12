@@ -1,3 +1,4 @@
-streamlit
-pandas
-akshare
+    akshare
+   pandas
+   streamlit
+   requests
