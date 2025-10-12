@@ -1,16 +1,16 @@
 import pandas as pd
 import akshare as ak
 import streamlit as st
+import plotly.graph_objects as
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import requests
 import json
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
 import talib
 import time
 
-# DeepSeek API配置 - 使用您提供的密钥
+# DeepSeek API配置
 DEEPSEEK_API_KEY = "sk-e9e5e5b7565b4f809deb7565b4f809de1c8d53c22fa1b"
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
@@ -231,6 +231,7 @@ def generate_trade_signals(df):
     # RSI信号
     if latest['RSI'] > 70:
         signals['rsi'] = "超买"
+    elif latest['RSI']"
     elif latest['RSI'] < 30:
         signals['rsi'] = "超卖"
     else:
@@ -288,6 +289,7 @@ def refresh_market_data():
                 st.session_state.sector_data, 
                 st.session_state.leading_stocks
             )
+            st.session_state.market            )
             st.session_state.market_sentiment = sentiment
             st.session_state.hot_sectors = hot_sectors
         
@@ -372,6 +374,8 @@ def main():
     # 初始化session state
     init_session_state()
     
+    # 页面_session_state()
+    
     # 页面标题
     st.title("🚀 DeepSeek智能选股系统")
     st.caption(f"最后更新: {st.session_state.last_update.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -386,6 +390,8 @@ def main():
     # 侧边栏配置
     with st.sidebar:
         st.divider()
+        
+        # 市场数据刷新()
         
         # 市场数据刷新
         if st.button("🔄 刷新市场数据", use_container_width=True):
@@ -409,7 +415,11 @@ def main():
         
         if st.session_state.watchlist:
             st.write("**自选股列表**")
+            for自选股列表**")
             for stock in st.session_state.watchlist:
+                st.code(stock)
+            
+:
                 st.code(stock)
             
             if st.button("🔍 分析全部自选股", use_container_width=True):
@@ -440,6 +450,8 @@ def main():
                     with st.spinner(f"获取 {stock_code} 数据..."):
                         stock_data = get_stock_data(
                             stock_code,
+                            (datetime(
+                            stock_code,
                             (datetime.now() - timedelta(days=180)).strftime("%Y%m%d"),
                             datetime.now().strftime("%Y%m%d")
                         )
@@ -447,6 +459,7 @@ def main():
                     if not stock_data.empty:
                         # 技术分析
                         with st.spinner("技术分析中..."):
+                            analysis_data = enhanced_technical):
                             analysis_data = enhanced_technical_analysis(stock_data.copy())
                             signals = generate_trade_signals(analysis_data)
                         
@@ -483,6 +496,7 @@ def main():
                             x=analysis_data['date'], 
                             y=analysis_data['upper_band'], 
                             name='上轨',
+                            line                            name='上轨',
                             line=dict(color='gray', width=1, dash='dot')
                         ))
                         
@@ -501,7 +515,7 @@ def main():
                             template='plotly_dark',
                             height=500
                         )
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(f fig, use_container_width=True)
                         
                         # 显示交易信号
                         col1, col2 = st.columns([1, 3])
