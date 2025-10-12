@@ -105,7 +105,7 @@ def analyze_stock(df):
 def get_ai_recommendation(analysis_data):
     """使用DeepSeek API获取AI推荐"""
     api_url = "https://api.deepseek.com/v1/chat/completions"
-    api_key = st.secrets.get("sk-a1f3b3b7c8ab486aa054f333bb4bd834", os.getenv("sk-a1f3b3b7c8ab486aa054f333bb4bd834", ""))
+    api_key = st.secrets.get("sk-e9e5e5b7565b4f809de1c8d53c22fa1b", os.getenv("sk-e9e5e5b7565b4f809de1c8d53c22fa1b", ""))
     
     if not api_key:
         return "错误：缺少DeepSeek API密钥"
@@ -240,3 +240,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
