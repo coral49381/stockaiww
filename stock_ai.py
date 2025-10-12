@@ -1,13 +1,11 @@
 import pandas as pd
 import akshare as ak
 import streamlit as st
-import plotly.graph_objects as
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import requests
 import json
 import numpy as np
-import talib
 import time
 
 # DeepSeek API配置
@@ -32,6 +30,8 @@ def init_session_state():
         st.session_state.sector_rotation = pd.DataFrame()
     if 'last_update' not in st.session_state:
         st.session_state.last_update = datetime.now() - timedelta(hours=1)
+    if 'analyze_watchlist' not in st.session_state:
+        st.session_state.analyze_watchlist = False
 
 # DeepSeek API交互
 def deepseek_chat(prompt, context=""):
@@ -62,7 +62,7 @@ def deepseek_chat(prompt, context=""):
     }
     
     try:
-        response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=10)
+        response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=30)
         response.raise_for_status()
         result = response.json()
         return result['choices'][0]['message']['content']
@@ -190,24 +190,53 @@ def analyze_sector_rotation(sector_data):
     
     return pivot_df.sort_values('score', ascending=False) if 'score' in pivot_df.columns else pivot_df
 
-# 增强型技术分析
+# EMA计算函数
+def calculate_ema(data, window):
+    return data.ewm(span=window, adjust=False).mean()
+
+# MACD计算函数
+def calculate_macd(data, fast=12, slow=26, signal=9):
+    ema_fast = calculate_ema(data, fast)
+    ema_slow = calculate_ema(data, slow)
+    macd_line = ema_fast - ema_slow
+    signal_line = calculate_ema(macd_line, signal)
+    return macd_line, signal_line
+
+# RSI计算函数
+def calculate_rsi(data, window=14):
+    delta = data.diff(1)
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+# 布林带计算函数
+def calculate_bollinger_bands(data, window=20, num_std=2):
+    rolling_mean = data.rolling(window=window).mean()
+    rolling_std = data.rolling(window=window).std()
+    upper_band = rolling_mean + (rolling_std * num_std)
+    lower_band = rolling_mean - (rolling_std * num_std)
+    return upper_band, rolling_mean, lower_band
+
+# 增强型技术分析（纯Python实现）
 def enhanced_technical_analysis(df):
     if df.empty:
         return df
     
-    # 计算技术指标
-    df['MA5'] = df['close'].rolling(window=5).mean()
-    df['MA20'] = df['close'].rolling(window=20).mean()
-    df['MA60'] = df['close'].rolling(window=60).mean()
+    # 计算指数移动平均线
+    df['MA5'] = df['close'].ewm(span=5, adjust=False).mean()
+    df['MA20'] = df['close'].ewm(span=20, adjust=False).mean()
+    df['MA60'] = df['close'].ewm(span=60, adjust=False).mean()
     
     # MACD
-    df['MACD'], df['MACD_signal'], _ = talib.MACD(df['close'])
+    df['MACD'], df['MACD_signal'] = calculate_macd(df['close'])
     
     # RSI
-    df['RSI'] = talib.RSI(df['close'], timeperiod=14)
+    df['RSI'] = calculate_rsi(df['close'])
     
-    # Bollinger Bands
-    df['upper_band'], df['middle_band'], df['lower_band'] = talib.BBANDS(df['close'], timeperiod=20)
+    # 布林带
+    df['upper_band'], df['middle_band'], df['lower_band'] = calculate_bollinger_bands(df['close'])
     
     # 成交量指标
     df['VOL_MA5'] = df['volume'].rolling(window=5).mean()
@@ -231,7 +260,6 @@ def generate_trade_signals(df):
     # RSI信号
     if latest['RSI'] > 70:
         signals['rsi'] = "超买"
-    elif latest['RSI']"
     elif latest['RSI'] < 30:
         signals['rsi'] = "超卖"
     else:
@@ -289,7 +317,6 @@ def refresh_market_data():
                 st.session_state.sector_data, 
                 st.session_state.leading_stocks
             )
-            st.session_state.market            )
             st.session_state.market_sentiment = sentiment
             st.session_state.hot_sectors = hot_sectors
         
@@ -302,22 +329,22 @@ def refresh_market_data():
 
 # 市场全景分析报告
 def generate_market_report():
-    report = "## 🌐 市场全景分析报告\n\n"
+    report = "##  🌐 市场全景分析报告\n\n"
     report += f"**更新时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
     
     # 市场情绪
-    report += f"### 📊 市场情绪: {st.session_state.market_sentiment}\n\n"
+    report += f"###  📊 市场情绪: {st.session_state.market_sentiment}\n\n"
     
     # 热点板块
     if st.session_state.hot_sectors:
-        report += "###  🔥 热点板块\n"
+        report += "### 🔥 热点板块\n"
         for sector in st.session_state.hot_sectors[:5]:
             report += f"- {sector}\n"
         report += "\n"
     
     # 板块轮动分析
     if not st.session_state.sector_rotation.empty:
-        report += "###  🔄 板块轮动趋势\n"
+        report += "### 🔄 板块轮动趋势\n"
         report += "| 板块 | 资金趋势 | 动量 | 轮动得分 |\n"
         report += "|------|----------|------|----------|\n"
         
@@ -374,8 +401,6 @@ def main():
     # 初始化session state
     init_session_state()
     
-    # 页面_session_state()
-    
     # 页面标题
     st.title("🚀 DeepSeek智能选股系统")
     st.caption(f"最后更新: {st.session_state.last_update.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -390,8 +415,6 @@ def main():
     # 侧边栏配置
     with st.sidebar:
         st.divider()
-        
-        # 市场数据刷新()
         
         # 市场数据刷新
         if st.button("🔄 刷新市场数据", use_container_width=True):
@@ -415,11 +438,7 @@ def main():
         
         if st.session_state.watchlist:
             st.write("**自选股列表**")
-            for自选股列表**")
             for stock in st.session_state.watchlist:
-                st.code(stock)
-            
-:
                 st.code(stock)
             
             if st.button("🔍 分析全部自选股", use_container_width=True):
@@ -442,15 +461,13 @@ def main():
                 st.write(ai_analysis)
         
         # 自选股分析
-        if hasattr(st.session_state, 'analyze_watchlist') and st.session_state.analyze_watchlist:
+        if st.session_state.analyze_watchlist:
             st.subheader("📊 自选股分析结果")
             
             for stock_code in st.session_state.watchlist:
                 with st.expander(f"股票分析: {stock_code}", expanded=True):
                     with st.spinner(f"获取 {stock_code} 数据..."):
                         stock_data = get_stock_data(
-                            stock_code,
-                            (datetime(
                             stock_code,
                             (datetime.now() - timedelta(days=180)).strftime("%Y%m%d"),
                             datetime.now().strftime("%Y%m%d")
@@ -459,7 +476,6 @@ def main():
                     if not stock_data.empty:
                         # 技术分析
                         with st.spinner("技术分析中..."):
-                            analysis_data = enhanced_technical):
                             analysis_data = enhanced_technical_analysis(stock_data.copy())
                             signals = generate_trade_signals(analysis_data)
                         
@@ -496,7 +512,6 @@ def main():
                             x=analysis_data['date'], 
                             y=analysis_data['upper_band'], 
                             name='上轨',
-                            line                            name='上轨',
                             line=dict(color='gray', width=1, dash='dot')
                         ))
                         
@@ -515,7 +530,7 @@ def main():
                             template='plotly_dark',
                             height=500
                         )
-                        st.plotly_chart(f fig, use_container_width=True)
+                        st.plotly_chart(fig, use_container_width=True)
                         
                         # 显示交易信号
                         col1, col2 = st.columns([1, 3])
@@ -544,13 +559,13 @@ def main():
         
         # 显示热点板块
         if st.session_state.hot_sectors:
-            st.markdown("###  🔥 热点板块")
+            st.markdown("### 🔥 热点板块")
             for sector in st.session_state.hot_sectors[:5]:
                 st.info(f"- {sector}")
         
         # 显示龙头股
         if not st.session_state.leading_stocks.empty:
-            st.markdown("###  今日龙头股")
+            st.markdown("### 今日龙头股")
             
             # 显示前5只龙头股
             for i, row in st.session_state.leading_stocks.head(5).iterrows():
