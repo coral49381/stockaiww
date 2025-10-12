@@ -3,6 +3,7 @@ import sys
 import time
 import requests
 import pandas as pd
+import akshare as as pd
 import akshare as ak
 import streamlit as st
 from datetime import datetime, timedelta
@@ -10,23 +11,22 @@ from datetime import datetime, timedelta
 # 获取当前时间
 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-# 代理配置 - 定义为可变对象以便在函数内部修改
-PROXY_SETTINGS = {
-    'http': 'http://127.0.0.1:7890', 
-    'https': 'http://127.0.0.1:7890'
-}
+# 代理配置 - 初始设置为None
+PROXY_SETTINGS = None
 
 # 全局请求设置
-REQUEST_TIMEOUT = 25
+REQUEST_TIMEOUT = 30
 MAX_RETRIES = 3
-RETRY_DELAY = 1.5
+RETRY_DELAY = 2
 
 # 直接在这里设置您的API密钥
-DEEPSEEK_API_KEY = "sk-e9e5e5b7565b4f809de1c8d53c22fa1b"
+DEEPSEEK_API_KEY = "sk-e9e5e5b7565b4f809deb7565b4f809de1c8d53c22fa1b"
 
 # 带代理和重试机制的请求函数
 def robust_request(url, method='get', params=None, json=None, headers=None):
     """带代理支持、超时设置和自动重试的HTTP请求函数"""
+    proxies = PROXY_SETTINGS if PROXY_SETTINGS else None
+    
     for attempt in range(MAX_RETRIES):
         try:
             response = requests.request(
@@ -35,13 +35,20 @@ def robust_request(url, method='get', params=None, json=None, headers=None):
                 params=params,
                 json=json,
                 headers=headers,
-                proxies=PROXY_SETTINGS,
+                proxies=proxies,
                 timeout=REQUEST_TIMEOUT
             )
             response.raise_for_status()
             return response
         except (requests.exceptions.RequestException, requests.exceptions.Timeout) as e:
             st.error(f"请求失败 (尝试 {attempt+1}/{MAX_RETRIES}): {str(e)}")
+            
+            # {str(e)}")
+            
+            # 如果是代理错误，建议用户检查代理设置
+            if "ProxyError" in str(e) and PROXY_SETTINGS:
+                st.error("代理连接失败！请检查代理设置或尝试禁用代理。")
+            
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_DELAY)
             else:
@@ -93,7 +100,7 @@ def analyze_stock(df):
         df['Histogram'] = df['MACD'] - df['Signal']
         
         # 计算RSI
-        delta = df['close'].diff()
+        delta = df['close'].diff        delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).fillna(0).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).fillna(0).rolling(window=14).mean()
         rs = gain / (loss + 1e-10)  # 防止除以零
@@ -148,19 +155,19 @@ def get_ai_recommendation(analysis_data):
             headers=headers
         )
         
-        if response and response.status_code == 200:
+        if response is not None and response.status_code == 200:
             return response.json()['choices'][0]['message']['content']
-        else:
+        elif response is not None:
             error_detail = response.text if hasattr(response, 'text') else str(response)
-            st.error(f"DeepSeek API错误: {response.status_code} - {error_detail[:200]}")
             return f"API返回错误: {response.status_code} - {error_detail[:200]}"
+        else:
+            return "API请求失败，请检查网络连接或代理设置"
     except Exception as e:
-        st.error(f"获取AI推荐失败: {str(e)}")
         return f"获取AI推荐失败: {str(e)}"
 
 # Streamlit应用界面
 def main():
-    global PROXY_SETTINGS  # 在函数开头声明全局变量
+    global PROXY_SETTINGS
     
     st.set_page_config(
         page_title="智能选股系统", 
@@ -184,12 +191,14 @@ def main():
         start_date = st.date_input("开始日期", datetime.now() - timedelta(days=180))
         end_date = st.date_input("结束日期", datetime.now())
         
+        # ", datetime.now())
+        
         # 代理设置选项
         st.subheader("网络设置")
-        use_proxy = st.checkbox("启用代理", value=True)
+        use_proxy = st.checkbox("启用代理", value=False)  # 默认禁用代理
         
-        # 在global声明后使用PROXY_SETTINGS
-        proxy_address = st.text_input("代理地址", PROXY_SETTINGS['http'])
+        # 代理地址输入
+        proxy_address = st.text_input("代理地址 (格式: http://ip:port)", "http://127.0.0.1:7890")
         
         # 更新代理设置
         if use_proxy:
@@ -197,10 +206,19 @@ def main():
                 'http': proxy_address,
                 'https': proxy_address
             }
+            st.info(f"当前代理设置: {PROXY_SETTINGS}")
         else:
-            PROXY_SETTINGS = {}
+            PROXY_SETTINGS = None
+            st.info("不使用代理")
         
-        st.info(f"当前代理设置: {PROXY_SETTINGS if use_proxy else '无'}")
+        # 常见代理端口参考
+        st.markdown("### 常见代理端口")
+        st.markdown("""
+        - Clash: `7890`
+        - V2Ray: `10809`
+        - Shadowsocks: `1080`
+        - Qv2ray: `8889`
+        """)
     
     # 主界面
     if st.button("分析股票"):
@@ -225,7 +243,7 @@ def main():
             if analysis_data is not None and not analysis_data.empty:
                 # 显示技术指标数据
                 display_df = analysis_data[['date', 'close', 'MA5', 'MA20', 'MACD', 'RSI']].copy()
-                display_df.columns = ['日期', '收盘价', '5日均线', '20日均线', 'MACD', 'RSI']
+                display_df.columns = ['日期', '收盘价', '5日均线', '20日均 '5日均线', '20日均线', 'MACD', 'RSI']
                 st.dataframe(display_df)
                 
                 # 绘制价格和MA线
