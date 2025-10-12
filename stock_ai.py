@@ -8,7 +8,7 @@ import streamlit as st
 from datetime import datetime, timedelta
 
 # 获取当前时间
-current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S-%d %H:%M:%S")
+current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # 代理配置
 PROXY_SETTINGS = {
@@ -26,10 +26,9 @@ def robust_request(url, method='get', params=None, json=None, headers=None):
     """带代理支持、超时设置和自动重试的HTTP请求函数"""
     for attempt in range(MAX_RETRIES):
         try:
+            # 使用关键字参数调用requests.request
             response = requests.request(
                 method=method,
-                url=url,
-               method,
                 url=url,
                 params=params,
                 json=json,
@@ -38,20 +37,17 @@ def robust_request(url, method='get', params=None, json=None, headers=None):
                 timeout=REQUEST_TIMEOUT
             )
             response.raise_for_status()
- )
-            response.raise_for_status()
             return response
         except (requests.exceptions.RequestException, requests.exceptions.Timeout) as e:
-            print.Timeout) as e:
-            print(f"请求失败 (尝试 {attempt+1}/{MAX_RETRIES}): {str(e)}")
+            st.error(f"请求失败 (尝试 {attempt+1}/{MAX_RETRIES}): {str(e)}")
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_DELAY)
             else:
-                raise Exception(f"API请求失败: {str(e)}")
+                st.error(f"API请求失败: {str(e)}")
+                return None
     return None
 
 # 获取股票数据函数
-def get_stock_data数据函数
 def get_stock_data(stock_code, start_date, end_date):
     """使用AKShare获取股票数据"""
     try:
@@ -69,12 +65,7 @@ def get_stock_data(stock_code, start_date, end_date):
             '收盘': 'close',
             '最高': 'high',
             '最低': 'low',
-            '成交量': 'volume',
-            '成交额': 'amount',
-            '振幅': 'amplitude',
-            '涨跌幅': 'change_percent',
-            '涨跌额': 'change_amount',
-            '换手率': 'turnover_rate'
+            '成交量': 'volume'
         })
         return stock_df
     except Exception as e:
@@ -82,31 +73,34 @@ def get_stock_data(stock_code, start_date, end_date):
         return None
 
 # 技术指标分析函数
-def analyze_stock指标分析函数
 def analyze_stock(df):
     """计算技术指标"""
     if df is None or df.empty:
         return None
     
-    # 计算移动平均线
-    df['MA5'] = df['close'].rolling(window=5).mean()
-    df['MA20'] = df['close'].rolling(window=20).mean()
-    
-    # 计算MACD
-    exp12 = df['close'].ewm(span=12, adjust=False).mean()
-    exp26 = df['close'].ewm(span=26, adjust=False).mean()
-    df['MACD'] = exp12 - exp26
-    df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    df['Histogram'] = df['MACD'] - df['Signal']
-    
-    # 计算RSI
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    
-    return df.tail(30)  # 返回最近30天数据
+    try:
+        # 计算移动平均线
+        df['MA5'] = df['close'].rolling(window=5).mean()
+        df['MA20'] = df['close'].rolling(window=20).mean()
+        
+        # 计算MACD
+        exp12 = df['close'].ewm(span=12, adjust=False).mean()
+        exp26 = df['close'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = exp12 - exp26
+        df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        df['Histogram'] = df['MACD'] - df['Signal']
+        
+        # 计算RSI
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['RSI'] = 100 - (100 / (1 + rs))
+        
+        return df.tail(30)  # 返回最近30天数据
+    except Exception as e:
+        st.error(f"技术分析失败: {str(e)}")
+        return None
 
 # AI推荐函数
 def get_ai_recommendation(analysis_data):
@@ -120,7 +114,7 @@ def get_ai_recommendation(analysis_data):
     # 准备请求数据
     prompt = f"""
     作为金融分析师，请根据以下股票技术指标数据提供专业分析：
-    {analysis_data[['date', 'close', 'MA5', 'MA20', 'MACD', 'Signal', 'Histogram', 'RSI']].to_string()}
+    {analysis_data[['date', 'close', 'MA5', 'MA20', 'MACD', 'Signal', 'Histogram', 'RSI']].tail(10).to_string()}
     
     请包含以下内容：
     1. 当前趋势分析（短期/中期）
@@ -145,7 +139,7 @@ def get_ai_recommendation(analysis_data):
     
     try:
         response = robust_request(
-            api_url, 
+            url=api_url, 
             method='post', 
             json=payload, 
             headers=headers
@@ -162,7 +156,6 @@ def get_ai_recommendation(analysis_data):
 def main():
     st.set_page_config(
         page_title="智能选股系统", 
-        page_icon股系统", 
         page_icon="📈", 
         layout="wide"
     )
@@ -216,29 +209,22 @@ def main():
             
             if analysis_data is not None:
                 # 显示技术指标数据
-                st.dataframe(analysis_data[['date', 'close', 'MA5', 'MA20', 'MACD', 'RSI']].rename(columns={
-                    'date': '日期',
-                    'close': '收盘价',
-                    'MA5': '5日均线',
-                    'MA20': '20日均线'
-                }))
+                display_df = analysis_data[['date', 'close', 'MA5', 'MA20', 'MACD', 'RSI']].copy()
+                display_df.columns = ['日期', '收盘价', '5日均线', '20日均线', 'MACD', 'RSI']
+                st.dataframe(display_df)
                 
                 # 绘制价格和MA线
-                st.line_chart(analysis_data.set_index('date')[['close', 'MA5', 'MA20']].rename(columns={
-                    'close': '收盘价',
-                    'MA5': '5日均线',
-                    'MA20': '20日均线'
-                }))
+                price_df = analysis_data.set_index('date')[['close', 'MA5', 'MA20']]
+                price_df.columns = ['收盘价', '5日均线', '20日均线']
+                st.line_chart(price_df)
                 
                 # 显示MACD图表
-                st.line_chart(analysis_data.set_index('date')[['MACD', 'Signal']].rename(columns={
-                    'MACD': 'MACD线',
-                    'Signal': '信号线'
-                }))
+                macd_df = analysis_data.set_index('date')[['MACD', 'Signal']]
+                macd_df.columns = ['MACD线', '信号线']
+                st.line_chart(macd_df)
                 
                 # AI推荐
                 with st.spinner("AI分析中..."):
-                   inner("AI分析中..."):
                     recommendation = get_ai_recommendation(analysis_data)
                 
                 st.subheader("AI推荐")
