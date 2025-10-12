@@ -6,8 +6,6 @@ import pandas as pd
 import akshare as ak
 import streamlit as st
 from datetime import datetime, timedelta
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 # 获取当前时间
 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -107,8 +105,6 @@ def get_hot_concepts():
 def get_leading_stocks():
     """获取各板块龙头股"""
     try:
-        # 获取行业龙头
-        industry_leaders = ak.stock_board_industry_cons_em(symbol="小金属")
         # 获取涨停股
         limit_up = ak.stock_zt_pool_em(date=datetime.now().strftime("%Y%m%d"))
         limit_up = limit_up.sort_values("最新涨跌幅", ascending=False)
@@ -196,7 +192,7 @@ def generate_technical_report(analysis_data):
     if last_row['GoldenCross']:
         report += "- ✅ MACD金叉形成，买入信号\n"
     elif last_row['DeathCross']:
-        report += "- ️ MACD死叉形成，卖出信号\n"
+        report += "- ⛔ MACD死叉形成，卖出信号\n"
     
     if last_row['Histogram'] > 0:
         report += "- MACD柱状线在0轴上方，多头力量占优\n"
@@ -208,7 +204,7 @@ def generate_technical_report(analysis_data):
     report += f"- RSI(14): {last_row['RSI']:.2f}\n"
     
     if last_row['RSI'] > 70:
-        report += "- ️ RSI进入超买区域，注意回调风险\n"
+        report += "- ⚠️ RSI进入超买区域，注意回调风险\n"
     elif last_row['RSI'] < 30:
         report += "- ✅ RSI进入超卖区域，可能有反弹机会\n"
     else:
@@ -220,7 +216,7 @@ def generate_technical_report(analysis_data):
     report += f"- 当前价格: {last_row['close']:.2f}\n"
     
     if last_row['close'] > last_row['UpperBand']:
-        report += "-  ⚠️ 价格突破上轨，警惕超买风险\n"
+        report += "- ⚠️ 价格突破上轨，警惕超买风险\n"
     elif last_row['close'] < last_row['LowerBand']:
         report += "- ✅ 价格跌破下轨，可能有超跌反弹机会\n"
     else:
@@ -234,7 +230,7 @@ def generate_technical_report(analysis_data):
     if last_row['VolumeChange'] > 0.5:
         report += "- ✅ 成交量显著放大，可能有主力资金介入\n"
     elif last_row['VolumeChange'] < -0.3:
-        report += "- ️ 成交量明显萎缩，市场参与度降低\n"
+        report += "- ⚠️ 成交量明显萎缩，市场参与度降低\n"
     
     return report
 
@@ -378,68 +374,39 @@ def advanced_ai_analysis(stock_data, sector_data, leading_stocks, user_query):
     except Exception as e:
         return f"获取AI推荐失败: {str(e)}"
 
-# 绘制高级K线图
-def plot_advanced_chart(df, stock_code):
-    """绘制包含技术指标的高级K线图"""
+# 绘制简化图表
+def plot_simplified_chart(df, stock_code):
+    """使用Streamlit内置图表绘制简化版K线图"""
     if df is None or df.empty:
-        return None
+        return
     
-    # 创建子图
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
-                       vertical_spacing=0.03,
-                       row_heights=[0.6, 0.2, 0.2])
+    st.subheader(f"{stock_code} 价格走势")
     
-    # K线图
-    fig.add_trace(go.Candlestick(x=df['date'],
-                                open=df['open'],
-                                high=df['high'],
-                                low=df['low'],
-                                close=df['close'],
-                                name='K线'), row=1, col=1)
+    # 价格图表
+    price_df = df.set_index('date')[['close', 'MA5', 'MA20', 'UpperBand', 'LowerBand']]
+    price_df.columns = ['收盘价', '5日均线', '20日均线', '布林带上轨', '布林带下轨']
+    st.line_chart(price_df)
     
-    # 均线
-    fig.add_trace(go.Scatter(x=df['date'], y=df['MA5'], line=dict(color='blue', width=1.5), name='5日线'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df['date'], y=df['MA10'], line=dict(color='orange', width=1.5), name='10日线'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df['date'], y=df['MA20'], line=dict(color='green', width=1.5), name='20日线'), row=1, col=1)
+    # MACD图表
+    st.subheader("MACD指标")
+    macd_df = df.set_index('date')[['MACD', 'Signal', 'Histogram']]
+    macd_df.columns = ['DIF', 'DEA', 'MACD柱']
+    st.area_chart(macd_df[['DIF', 'DEA']])
+    st.bar_chart(macd_df['MACD柱'])
     
     # 成交量
-    colors = ['green' if close > open_ else 'red' for close, open_ in zip(df['close'], df['open'])]
-    fig.add_trace(go.Bar(x=df['date'], y=df['volume'], marker_color=colors, name='成交量'), row=2, col=1)
+    st.subheader("成交量")
+    volume_df = df.set_index('date')['volume']
+    st.bar_chart(volume_df)
     
-    # MACD
-    colors_hist = ['green' if h >= 0 else 'red' for h in df['Histogram']]
-    fig.add_trace(go.Bar(x=df['date'], y=df['Histogram'], marker_color=colors_hist, name='MACD柱'), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df['date'], y=df['MACD'], line=dict(color='blue', width=1.5), name='DIF'), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df['date'], y=df['Signal'], line=dict(color='orange', width=1.5), name='DEA'), row=3, col=1)
-    
-    # 标记买卖点
+    # 买卖点标记
     buy_points = df[df['GoldenCross']]
     sell_points = df[df['DeathCross']]
     
     if not buy_points.empty:
-        fig.add_trace(go.Scatter(x=buy_points['date'], y=buy_points['low']*0.98, 
-                                mode='markers', marker=dict(symbol='triangle-up', size=10, color='green'),
-                                name='买点'), row=1, col=1)
-    
+        st.success(f"发现 {len(buy_points)} 个买入信号点")
     if not sell_points.empty:
-        fig.add_trace(go.Scatter(x=sell_points['date'], y=sell_points['high']*1.02, 
-                                mode='markers', marker=dict(symbol='triangle-down', size=10, color='red'),
-                                name='卖点'), row=1, col=1)
-    
-    # 更新布局
-    fig.update_layout(
-        title=f'{stock_code} 高级技术分析',
-        xaxis_rangeslider_visible=False,
-        height=800,
-        showlegend=True,
-        template='plotly_dark'
-    )
-    
-    fig.update_yaxes(title_text="价格", row=1, col=1)
-    fig.update_yaxes(title_text="成交量", row=2, col=1)
-    fig.update_yaxes(title_text="MACD", row=3, col=1)
-    
-    return fig
+        st.warning(f"发现 {len(sell_points)} 个卖出信号点")
 
 # Streamlit应用界面
 def main():
@@ -607,19 +574,16 @@ def main():
                             )
                         
                         # 绘制图表
-                        fig = plot_advanced_chart(analysis_data, st.session_state.current_stock)
+                        plot_simplified_chart(analysis_data, st.session_state.current_stock)
                         
                         # 组合最终响应
                         full_response = f"## {st.session_state.current_stock} 深度分析报告\n\n"
-                        full_response += f"###  💡 买卖点建议\n{trade_recommendation}\n\n"
+                        full_response += f"### 💡 买卖点建议\n{trade_recommendation}\n\n"
                         full_response += tech_report + "\n\n"
-                        full_response += f"###  🤖 AI专业分析\n{ai_analysis}\n\n"
+                        full_response += f"### 🤖 AI专业分析\n{ai_analysis}\n\n"
                         
                         # 更新消息
                         message_placeholder.markdown(full_response)
-                        
-                        # 显示图表
-                        st.plotly_chart(fig, use_container_width=True)
                     else:
                         message_placeholder.error("技术分析失败")
                 else:
