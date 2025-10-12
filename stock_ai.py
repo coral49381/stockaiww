@@ -1,246 +1,222 @@
-import streamlit as st
-import pandas as pd
-import akshare as ak
-import requests
-import json
+import os
+import sys
 import time
-from datetime import datetime
+import requests
+import pandas as pd
+import akshare as as pd
+import akshare as ak
+import streamlit as st
+from datetime import datetime, timedelta
 
-# 设置页面标题和布局
-st.set_page_config(
-    page_title="A股智能选股系统",
-    page_icon="📈",
-    layout="wide"
-)
+# 获取当前时间
+current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-# 设置DeepSeek API密钥（替换成你自己的密钥）
-DEEPSEEK_API_KEY = "sk-a1f3b3b7c8ab486aa054f333bb4bd834"
+# 科学上网代理配置 - 请根据您的实际代理设置修改
+PROXY_SETTINGS = {
+    'http': 'http://127.0.0.1:7890',  # 常用Clash/V2Ray默认端口
+    'https': 'http://127.0.0.1:7890'
+}
 
-# 初始化会话状态
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant", "content": "您好！我是您的A股投资助手，请问今天需要分析哪些股票？"}
-    ]
+# 全局请求设置# 全局请求设置
+REQUEST_TIMEOUT = 25  # 超时时间延长到25秒
+MAX_RETRIES = 3       # 最大重试次数
+RETRY_DELAY = 1.5     # 重试间隔(秒)
 
-# 显示历史消息
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+# 带代理和重试机制的请求函数
+def robust_request(url, method='get', params=None, json=None, headers=None):
+    """带代理支持、超时设置和自动重试的HTTP请求函数"""
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = requests.request(
+                method=method,
+                url=url,
+                params=params,
+                json=json,
+                headers=headers,
+                proxies=PROXY_SETTINGS,  # 使用代理
+                timeout=REQUEST_TIMEOUT  # 超时设置
+            )
+            response.raise_for_status()  # 检查HTTP错误
+            return response
+        except (requests.exceptions.RequestException, requests.exceptions.Timeout) as e:
+            print(f"请求失败 (尝试 {attempt+1}/{MAX_RETRIES}): {str(e)}")
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY)
+            else:
+                raise Exception(f"API请求失败: {str(e)}")
+    return None
 
-# 获取股票数据函数
-def get_stock_data(stock_code):
-    """获取股票实时数据"""
+# 获取股票数据函数 - 使用股票数据函数 - 使用代理
+def get_stock_data(stock_code, start_date, end_date):
+    """使用AKShare获取股票数据，支持代理"""
     try:
-        df = ak.stock_zh_a_spot_em()
-        stock_data = df[df["代码"] == stock_code].iloc[0]
-        return {
-            "代码": stock_code,
-            "名称": stock_data["名称"],
-            "最新价": stock_data["最新价"],
-            "涨跌幅": stock_data["涨跌幅"],
-            "成交量": stock_data["成交量"],
-            "换手率": stock_data["换手率"],
-            "市盈率": stock_data["市盈率-动态"]
-        }
-    except:
+        # 使用AKShare获取数据
+        stock_df = ak.stock_zh_a_hist(
+            symbol=stock_code, 
+            period="daily", 
+            start_date=start_date, 
+            end_date=end_date,
+            adjust="qfq"
+        )
+        return stock_df
+    except Exception as e:
+        st.error(f"获取股票数据失败: {str(e)}")
         return None
 
-def get_market_sentiment():
-    """获取市场情绪数据"""
-    try:
-        # 获取涨跌家数
-        df = ak.stock_zh_a_spot_em()
-        rise_count = len(df[df['涨跌幅'] > 0])
-        fall_count = len(df[df['涨跌幅'] < 0])
-        
-        # 获取热点板块
-        sector_df = ak.stock_sector_spot_em()
-        hot_sectors = sector_df.nlargest(5, '涨跌幅')['板块名称'].tolist()
-        
-        return {
-            "上涨家数": rise_count,
-            "下跌家数": fall_count,
-            "热门板块": hot_sectors
-        }
-    except:
+# 技术指标分析函数
+def analyze_stock(df):
+    """计算技术指标"""
+    if df is None or df.empty:
         return None
+    
+    # 计算移动平均线
+    df['MA5'] = df['收盘'].rolling(window=5).mean()
+    df['MA20'] = df['收盘'].rolling(window=20).mean()
+    
+    # 计算MACD
+    exp12 = df['收盘'].ewm(span=12, adjust=False).mean()
+    exp26 = df['收盘'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = exp12 - exp26
+    df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    df['Histogram'] = df['MACD'] - df['Signal']
+    
+   '] - df['Signal']
+    
+    # 计算RSI
+    delta = df['收盘'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    return df.tail(30)  # 返回最近30天数据
 
-# 调用DeepSeek API函数
-def get_ai_response(user_input):
-    """调用DeepSeek API获取回复"""
+# AI推荐函数 - 使用DeepSeek API
+def get_ai_recommendation(_ai_recommendation(analysis_data):
+    """使用DeepSeek API获取AI推荐"""
+    api_url = "https://api.deepseek.com/v1/chat/completions"
+    api_key = st.secrets["sk-a1f3b3b7c8ab486aa054f333bb4bd834"]  # 从Streamlit secrets获取API密钥
+    
+    # 准备请求数据
+    prompt = f"""
+    作为金融分析师，请根据以下股票技术指标数据提供专业分析：
+    {analysis_data.to_string()}
+    
+    请包含以下内容：
+    1. 当前趋势分析（. 当前趋势分析（短期/中期）
+    2. 关键指标解读（MACD, RSI）
+    3. 买卖建议（买入/持有/卖出）
+    4. 风险提示
+    """
+    
     headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
+        "Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
-    # 构建对话上下文
-    messages = [{"role": "system", "content": "你是一位专业的A股量化分析师，精通技术分析和基本面分析。"}]
-    for msg in st.session_state.messages:
-        messages.append({"role": msg["role"], "content": msg["content"]})
-    messages.append({"role": "user", "content": user_input})
-    
     payload = {
         "model": "deepseek-chat",
-        "messages": messages,
-        "temperature": 0.3,
-        "max_tokens": 2000
+        "messages": [
+            {"role": "system", "content": "你是专业的金融分析师，擅长技术指标解读和股票推荐"},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.3
     }
     
     try:
-        response = requests.post(
-            "https://api.deepseek.com/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30
+        response = robust_request(
+            api_url, 
+            method='post', 
+            json=payload, 
+            headers=headers
         )
-        if response.status_code == 200:
+        
+        if response and response.status_code == 200:
             return response.json()['choices'][0]['message']['content']
         else:
-            return f"API错误: {response.status_code} - {response.text}"
+            return f"API返回错误: {response.text if response else '无响应'}"
     except Exception as e:
-        return f"请求失败: {str(e)}"
+        return f"获取AI推荐失败: {str(e)}"
 
-# 智能选股功能
-def select_stocks_by_strategy(strategy_description):
-    """根据策略描述选股"""
-    # 获取全市场股票
-    all_stocks = ak.stock_info_a_code_name()['code'].tolist()
+# Streamlit应用界面
+def main():
+    st.set_page_config(
+        page_title="智能选股系统", 
+        page_icon="📈", 
+        layout="wide"
+    )
     
-    # 由于全市场股票太多，这里只取前200只作为示例
-    sample_stocks = all_stocks[:200]
+    st.title("🚀 智能选股系统")
+    st.caption(f"最后更新: {current_time} | 使用AKShare和DeepSeek API")
     
-    # 构建策略提示
-    prompt = f"""
-    你是一位量化交易专家，请根据以下策略从股票池中筛选符合要求的股票：
+    # 侧边栏设置
+    with st.sidebar:
+        st.header("设置")
+        stock_code = st.text_input("股票代码", "000001")
+        start_date = st.date_input("开始日期", datetime.now() - timedelta(days=180))
+        end_date = st.date_input("结束日期", datetime.now())
+        
+        # 代理设置选项
+        st.subheader("网络设置")
+        use_proxy = st.checkbox("启用代理", value=True)
+        proxy_address = st.text_input("代理地址", PROXY_SETTINGS['http'])
+        
+        # 更新代理设置
+        global PROXY_SETTINGS
+        if use_proxy:
+            PROXY_SETTINGS = {
+                'http': proxy_address,
+                'https': proxy proxy_address,
+                'https': proxy_address
+            }
+        else:
+            PROXY_SETTINGS = {}
+        
+        st.info(f"当前代理设置: {PROXY_SETTINGS if use_proxy else '无'}")
     
-    【策略描述】
-    {strategy_description}
-    
-    【股票池】（共{len(sample_stocks)}只股票）
-    {sample_stocks}
-    
-    输出要求：
-    1. 只需返回股票代码列表，例如：['600519', '000001']
-    2. 不要包含任何解释性文字
-    """
-    
-    # 获取AI筛选结果
-    response = get_ai_response(prompt)
-    
-    # 尝试解析返回的股票代码列表
-    try:
-        # 尝试从字符串中提取股票代码
-        import re
-        codes = re.findall(r"\d{6}", response)
-        return codes
-    except:
-        return []
+    # 主界面
+    if st.button界面
+    if st.button("分析股票"):
+        with st.spinner("获取数据中..."):
+            stock_data = get_stock_data(
+                stock_code, 
+                start_date.strftime("%Y%m%d"),.strftime("%Y%m%d"), 
+                end_date.strftime("%Y%m%d")
+            )
+        
+        if stock_data is not None:
+            st.success("数据获取成功!")
+            
+            # 显示原始数据
+            st.subheader("股票历史数据")
+            st.dataframe(stock_data.tail(10), height=300)
+            
+            # 技术分析
+            st.subheader("技术分析")
+            analysis_data = analyze_stock(stock_data.copy())
+            
+            if analysis_data is not None:
+                # 显示技术指标数据
+                st.dataframe(analysis_data[['日期', '收盘', 'MA5', 'MA20', 'MACD', 'RSI']])
+                
+                # 绘制价格和MA线
+                st.line_chart(analysis_data.set_index('日期')[['收盘', 'MA5', 'MA20']])
+                
+                # 显示MACD图表
+                st.line_chart(analysis_data.set_index('日期')[['MACD', 'Signal']])
+                
+                # AI推荐
+                with st.spinner("AI分析中..."):
+                    recommendation = get_ai_recommendation(analysis_data)
+                
+                st.subheader("AI推荐")
+                st.markdown(f"**股票代码: {stock_code}**")
+                st.markdown(recommendation)
+            else:
+                st.warning("技术分析失败")
+        else:
+            st.error("无法获取股票数据")
 
-# 主聊天界面
-if user_input := st.chat_input("请输入您的指令..."):
-    # 添加到聊天记录
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    
-    # 显示用户消息
-    with st.chat_message("user"):
-        st.markdown(user_input)
-    
-    # 处理不同类型指令
-    if user_input.startswith("分析"):
-        # 提取股票代码
-        stock_code = user_input[2:].strip()
-        if stock_code.isdigit() and len(stock_code)==6:
-            with st.chat_message("assistant"):
-                with st.spinner("分析中..."):
-                    # 获取股票数据
-                    stock_data = get_stock_data(stock_code)
-                    
-                    if stock_data:
-                        # 构建分析请求
-                        prompt = f"""
-                        你是一位资深股票分析师，请根据以下股票信息进行分析：
-                        
-                        【股票信息】
-                        代码：{stock_data['代码']}
-                        名称：{stock_data['名称']}
-                        最新价：{stock_data['最新价']}
-                        涨跌幅：{stock_data['涨跌幅']}%
-                        成交量：{stock_data['成交量']}手
-                        换手率：{stock_data['换手率']}%
-                        市盈率：{stock_data['市盈率']}
-                        
-                        请从技术面、资金面和市场情绪三方面分析，给出：
-                        1. 短期走势预测
-                        2. 操作建议（买入/持有/卖出）
-                        3. 风险提示
-                        """
-                        analysis_result = get_ai_response(prompt)
-                        st.markdown(analysis_result)
-                        st.session_state.messages.append({"role": "assistant", "content": analysis_result})
-                    else:
-                        error_msg = f"无法获取股票{stock_code}的数据，请检查代码是否正确"
-                        st.error(error_msg)
-                        st.session_state.messages.append({"role": "assistant", "content": error_msg})
-        else:
-            with st.chat_message("assistant"):
-                error_msg = "请提供正确的股票代码，例如：分析600519"
-                st.error(error_msg)
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
-    
-    elif user_input.startswith("选股"):
-        strategy = user_input[2:].strip()
-        if strategy:
-            with st.chat_message("assistant"):
-                st.markdown(f"正在根据策略『{strategy}』筛选股票...")
-                with st.spinner("筛选中，请稍候..."):
-                    selected_stocks = select_stocks_by_strategy(strategy)
-                    
-                    if selected_stocks:
-                        # 获取股票详情
-                        df = ak.stock_zh_a_spot_em()
-                        result_df = df[df['代码'].isin(selected_stocks)][['代码','名称','最新价','涨跌幅','市盈率-动态']]
-                        
-                        # 显示结果表格
-                        st.dataframe(result_df.style.highlight_max(axis=0, subset=['涨跌幅']))
-                        
-                        result_msg = f"根据策略『{strategy}』，筛选出{len(selected_stocks)}只股票"
-                        st.session_state.messages.append({"role": "assistant", "content": result_msg})
-                    else:
-                        error_msg = "未筛选出符合条件的股票，请尝试调整策略"
-                        st.error(error_msg)
-                        st.session_state.messages.append({"role": "assistant", "content": error_msg})
-        else:
-            with st.chat_message("assistant"):
-                error_msg = "请提供选股策略，例如：选股PE<20且涨幅>5%"
-                st.error(error_msg)
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
-    
-    elif "市场情绪" in user_input:
-        with st.chat_message("assistant"):
-            with st.spinner("获取市场情绪中..."):
-                sentiment = get_market_sentiment()
-                if sentiment:
-                    msg = f"当前市场情绪：\n"
-                    msg += f"- 上涨家数：{sentiment['上涨家数']}\n"
-                    msg += f"- 下跌家数：{sentiment['下跌家数']}\n"
-                    msg += f"- 热门板块：{', '.join(sentiment['热门板块'])}\n\n"
-                    
-                    # 添加简要分析
-                    analysis_prompt = f"作为市场分析师，请根据以下数据提供简要市场情绪分析：\n{msg}"
-                    analysis = get_ai_response(analysis_prompt)
-                    msg += "【市场情绪分析】\n" + analysis
-                    
-                    st.markdown(msg)
-                    st.session_state.messages.append({"role": "assistant", "content": msg})
-                else:
-                    error_msg = "获取市场情绪数据失败"
-                    st.error(error_msg)
-                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
-    
-    else:
-        # 普通对话
-        with st.chat_message("assistant"):
-            with st.spinner("思考中..."):
-                ai_response = get_ai_response(user_input)
-                st.markdown(ai_response)
-                st.session_state.messages.append({"role": "assistant", "content": ai_response})
+if __name__ == "__main__":
+    main()
