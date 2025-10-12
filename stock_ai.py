@@ -7,24 +7,24 @@ import akshare as ak
 import streamlit as st
 import numpy as np
 from datetime import datetime, timedelta
+import plotly.graph_objects as go
 
 # 获取当前时间
 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-# 代理配置 - 初始设置为None
+# 代理配置
 PROXY_SETTINGS = None
 
 # 全局请求设置
-REQUEST_TIMEOUT = 45  # 增加超时时间
+REQUEST_TIMEOUT = 45
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 
-# 直接在这里设置您的API密钥
+# 设置您的API密钥
 DEEPSEEK_API_KEY = "sk-e9e5e5b7565b4f809de1c8d53c22fa1b"
 
 # 带代理和重试机制的请求函数
 def robust_request(url, method='get', params=None, json=None, headers=None):
-    """带代理支持、超时设置和自动重试的HTTP请求函数"""
     proxies = PROXY_SETTINGS if PROXY_SETTINGS else None
     
     for attempt in range(MAX_RETRIES):
@@ -44,7 +44,6 @@ def robust_request(url, method='get', params=None, json=None, headers=None):
             error_msg = f"请求失败 (尝试 {attempt+1}/{MAX_RETRIES}): {str(e)}"
             st.error(error_msg)
             
-            # 特定错误处理
             if "Read timed out" in str(e):
                 st.warning("API响应超时，可能是网络问题或服务器繁忙")
             elif "ProxyError" in str(e) and PROXY_SETTINGS:
@@ -58,7 +57,6 @@ def robust_request(url, method='get', params=None, json=None, headers=None):
 
 # 获取股票数据函数
 def get_stock_data(stock_code, start_date, end_date):
-    """使用AKShare获取股票数据"""
     try:
         stock_df = ak.stock_zh_a_hist(
             symbol=stock_code, 
@@ -67,7 +65,6 @@ def get_stock_data(stock_code, start_date, end_date):
             end_date=end_date,
             adjust="qfq"
         )
-        # 重命名列为英文
         stock_df = stock_df.rename(columns={
             '日期': 'date',
             '开盘': 'open',
@@ -83,20 +80,19 @@ def get_stock_data(stock_code, start_date, end_date):
 
 # 获取板块资金流向
 def get_sector_fund_flow():
-    """获取行业板块资金流向"""
     try:
-        # 新版本AKShare接口
         sector_df = ak.stock_sector_fund_flow_rank(indicator="今日")
         
-        # 确保有"净额"列
-        if "净额" not in sector_df.columns and "主力净流入-净额" in sector_df.columns:
-            sector_df["净额"] = sector_df["主力净流入-净额"]
-        
-        if "净额" in sector_df.columns:
-            sector_df = sector_df.sort_values("净额", ascending=False)
-            return sector_df.head(10)
+        # 列名兼容处理
+        amount_column = '主力净流入-净额'
+        if amount_column in sector_df.columns:
+            sector_df = sector_df.rename(columns={amount_column: '净额'})
+            return sector_df.sort_values("净额", ascending=False).head(10)
         else:
-            st.error("板块资金流向数据中缺少'净额'列")
+            # 尝试备用列名
+            for col in sector_df.columns:
+                if "净流入" in col or "净额" in col:
+                    return sector_df.sort_values(col, ascending=False).head(10)
             return None
     except Exception as e:
         st.error(f"获取板块资金流向失败: {str(e)}")
@@ -104,35 +100,96 @@ def get_sector_fund_flow():
 
 # 获取龙头股信息
 def get_leading_stocks():
-    """获取各板块龙头股"""
     try:
-        # 获取涨停股
         date_str = datetime.now().strftime("%Y%m%d")
         limit_up = ak.stock_zt_pool_em(date=date_str)
         
-        # 使用正确的列名 "涨跌幅"
-        if "涨跌幅" in limit_up.columns:
-            limit_up = limit_up.sort_values("涨跌幅", ascending=False)
-        elif "最新涨跌幅" in limit_up.columns:  # 兼容旧版本
-            limit_up = limit_up.sort_values("最新涨跌幅", ascending=False)
-        else:
-            # 尝试找到涨跌幅列
-            for col in limit_up.columns:
-                if "涨" in col and "幅" in col:
-                    limit_up = limit_up.sort_values(col, ascending=False)
-                    break
-            else:
-                # 默认按第4列排序
-                limit_up = limit_up.sort_values(limit_up.columns[3], ascending=False)
+        # 列名兼容处理
+        change_column = None
+        for col in ['涨跌幅', '涨幅', '最新涨跌幅', '涨跌']:
+            if col in limit_up.columns:
+                change_column = col
+                break
         
-        return limit_up.head(10)
+        if change_column:
+            return limit_up.sort_values(change_column, ascending=False).head(10)
+        else:
+            return limit_up.head(10)
     except Exception as e:
         st.error(f"获取龙头股失败: {str(e)}")
         return None
 
+# 选股引擎
+def stock_selection_engine(sector_data, leading_stocks):
+    """选股引擎：结合板块资金和龙头股表现"""
+    selected_stocks = []
+    
+    if sector_data is not None and not sector_data.empty:
+        # 获取资金流入前三板块
+        top_sectors = sector_data.head(3)
+        
+        # 尝试获取板块名称列
+        sector_name_col = None
+        for col in ['板块名称', 'name', '行业', '板块']:
+            if col in sector_data.columns:
+                sector_name_col = col
+                break
+        
+        if sector_name_col:
+            for sector in top_sectors[sector_name_col]:
+                # 在龙头股中筛选该板块股票
+                if '所属板块' in leading_stocks.columns:
+                    sector_stocks = leading_stocks[leading_stocks['所属板块'].str.contains(sector, na=False)]
+                    if not sector_stocks.empty:
+                        # 尝试获取股票代码列
+                        code_col = None
+                        for col in ['代码', '股票代码', 'symbol']:
+                            if col in sector_stocks.columns:
+                                code_col = col
+                                break
+                        
+                        if code_col:
+                            selected_stocks.extend(sector_stocks[code_col].tolist())
+    
+    # 去重并限制数量
+    return list(set(selected_stocks))[:5]
+
+# 多股分析函数
+def analyze_multiple_stocks(stock_list):
+    """批量分析多只股票"""
+    results = []
+    for stock_code in stock_list:
+        with st.spinner(f"分析 {stock_code} 中..."):
+            stock_data = get_stock_data(
+                stock_code,
+                (datetime.now() - timedelta(days=180)).strftime("%Y%m%d"),
+                datetime.now().strftime("%Y%m%d")
+            )
+            
+            if stock_data is not None and not stock_data.empty:
+                analysis_data = enhanced_analyze_stock(stock_data.copy())
+                sector_data = st.session_state.get('sector_data', None)
+                leading_stocks = st.session_state.get('leading_stocks', None)
+                
+                if analysis_data is not None:
+                    trade_recommendation = generate_trade_recommendation(
+                        analysis_data, sector_data, leading_stocks
+                    )
+                    results.append({
+                        'code': stock_code,
+                        'recommendation': trade_recommendation,
+                        'last_close': analysis_data.iloc[-1]['close'] if analysis_data is not None else 0
+                    })
+    
+    # 按推荐强度排序
+    return sorted(results, key=lambda x: (
+        0 if "强烈买入" in x['recommendation'] else 
+        1 if "谨慎买入" in x['recommendation'] else 
+        2 if "持有观望" in x['recommendation'] else 3
+    ))
+
 # 技术指标分析函数
 def enhanced_analyze_stock(df):
-    """增强版技术指标分析"""
     if df is None or df.empty:
         return None
     
@@ -150,238 +207,136 @@ def enhanced_analyze_stock(df):
         df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
         df['Histogram'] = df['MACD'] - df['Signal']
         
-        # 计算RSI
-        delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).fillna(0).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).fillna(0).rolling(window=14).mean()
-        rs = gain / (loss + 1e-10)
-        df['RSI'] = 100 - (100 / (1 + rs))
-        
-        # 计算布林带
-        df['MiddleBand'] = df['close'].rolling(window=20).mean()
-        df['UpperBand'] = df['MiddleBand'] + 2 * df['close'].rolling(window=20).std()
-        df['LowerBand'] = df['MiddleBand'] - 2 * df['close'].rolling(window=20).std()
-        
-        # 计算成交量变化
-        df['VolumeChange'] = df['volume'].pct_change()
-        
-        # 确定趋势
-        df['Trend'] = '中性'
-        df.loc[(df['MA5'] > df['MA10']) & (df['MA10'] > df['MA20']), 'Trend'] = '上升'
-        df.loc[(df['MA5'] < df['MA10']) & (df['MA10'] < df['MA20']), 'Trend'] = '下降'
-        
-        # 标记关键点
-        df['Breakout'] = df['close'] > df['UpperBand'].shift(1)
-        df['Breakdown'] = df['close'] < df['LowerBand'].shift(1)
-        
         # 标记金叉死叉
         df['GoldenCross'] = (df['MACD'] > df['Signal']) & (df['MACD'].shift(1) < df['Signal'].shift(1))
         df['DeathCross'] = (df['MACD'] < df['Signal']) & (df['MACD'].shift(1) > df['Signal'].shift(1))
         
-        # 记录信号发生的日期
-        df['BuySignalDate'] = None
-        df['SellSignalDate'] = None
-        df.loc[df['GoldenCross'], 'BuySignalDate'] = df['date']
-        df.loc[df['DeathCross'], 'SellSignalDate'] = df['date']
-        
-        return df.tail(30)  # 返回最近30天数据
+        return df.dropna()
     except Exception as e:
         st.error(f"技术分析失败: {str(e)}")
         return None
 
-# 生成详细技术报告
-def generate_technical_report(analysis_data):
-    """生成详细的技术分析报告"""
-    if analysis_data is None or analysis_data.empty:
-        return "无有效数据生成报告"
+# 市场全景分析
+def market_overview_analysis():
+    """生成市场全景报告"""
+    report = "## 📊 市场全景分析\n\n"
     
-    last_row = analysis_data.iloc[-1]
-    report = f"### 技术分析报告\n\n"
-    report_date = last_row['date'].strftime('%Y-%m-%d')
-    report += f"**最后交易日**: {report_date}\n\n"
+    # 1. 板块资金分析
+    with st.spinner("获取板块资金流向..."):
+        sector_data = get_sector_fund_flow()
     
-    # 趋势判断
-    report += f"**趋势分析**:\n"
-    report += f"- 当前趋势: {last_row['Trend']}\n"
-    report += f"- 5日线: {last_row['MA5']:.2f}, 10日线: {last_row['MA10']:.2f}, 20日线: {last_row['MA20']:.2f}\n"
+    if sector_data is not None and not sector_data.empty:
+        report += "### 板块资金流向\n"
+        report += "| 板块 | 净流入(亿) | 涨跌幅 |\n|------|------------|--------|\n"
+        
+        # 尝试获取列名
+        amount_col = '净额'
+        sector_name_col = '板块名称'
+        change_col = '涨跌幅'
+        
+        # 如果没有找到列名，使用默认值
+        if amount_col not in sector_data.columns:
+            amount_col = sector_data.columns[1] if len(sector_data.columns) > 1 else 'unknown'
+        if sector_name_col not in sector_data.columns:
+            sector_name_col = sector_data.columns[0]
+        if change_col not in sector_data.columns:
+            change_col = sector_data.columns[2] if len(sector_data.columns) > 2 else 'unknown'
+        
+        for _, row in sector_data.head(5).iterrows():
+            sector_name = row[sector_name_col]
+            amount = row.get(amount_col, 0)
+            change = row.get(change_col, "0%")
+            
+            # 金额转换为亿
+            if isinstance(amount, (int, float)):
+                amount = amount / 100000000
+            
+            report += f"| {sector_name} | {amount:.2f} | {change} |\n"
     
-    if last_row['Trend'] == '上升':
-        report += "- 均线呈多头排列，短期趋势向好\n"
-    elif last_row['Trend'] == '下降':
-        report += "- 均线呈空头排列，短期趋势向淡\n"
+    # 2. 龙头股分析
+    with st.spinner("获取龙头股信息..."):
+        leading_stocks = get_leading_stocks()
     
-    # MACD分析
-    report += f"\n**MACD分析**:\n"
-    report += f"- DIF值: {last_row['MACD']:.4f}, DEA值: {last_row['Signal']:.4f}\n"
+    if leading_stocks is not None and not leading_stocks.empty:
+        report += "\n###  今日龙头股\n"
+        report += "| 股票 | 名称 | 涨跌幅 | 所属板块 |\n|------|------|--------|----------|\n"
+        
+        # 尝试获取列名
+        code_col = '代码'
+        name_col = '名称'
+        change_col = '涨跌幅'
+        sector_col = '所属板块'
+        
+        # 列名备选方案
+        if code_col not in leading_stocks.columns:
+            code_col = leading_stocks.columns[0]
+        if name_col not in leading_stocks.columns:
+            name_col = leading_stocks.columns[1] if len(leading_stocks.columns) > 1 else 'unknown'
+        if change_col not in leading_stocks.columns:
+            change_col = leading_stocks.columns[2] if len(leading_stocks.columns) > 2 else 'unknown'
+        if sector_col not in leading_stocks.columns:
+            sector_col = leading_stocks.columns[3] if len(leading_stocks.columns) > 3 else 'unknown'
+        
+        for _, row in leading_stocks.head(5).iterrows():
+            code = row[code_col]
+            name = row[name_col]
+            change = row[change_col]
+            sector = row[sector_col] if sector_col in row else ""
+            
+            report += f"| {code} | {name} | {change} | {sector} |\n"
     
-    if last_row['GoldenCross']:
-        report += f"- ✅ MACD金叉形成（{report_date}），买入信号\n"
-    elif last_row['DeathCross']:
-        report += f"- ⛔ MACD死叉形成（{report_date}），卖出信号\n"
-    
-    if last_row['Histogram'] > 0:
-        report += "- MACD柱状线在0轴上方，多头力量占优\n"
-    else:
-        report += "- MACD柱状线在0轴下方，空头力量占优\n"
-    
-    # RSI分析
-    report += f"\n**RSI分析**:\n"
-    report += f"- RSI(14): {last_row['RSI']:.2f}\n"
-    
-    if last_row['RSI'] > 70:
-        report += "- ⚠️ RSI进入超买区域，注意回调风险\n"
-    elif last_row['RSI'] < 30:
-        report += "- ✅ RSI进入超卖区域，可能有反弹机会\n"
-    else:
-        report += "- RSI处于合理区间\n"
-    
-    # 布林带分析
-    report += f"\n**布林带分析**:\n"
-    report += f"- 上轨: {last_row['UpperBand']:.2f}, 中轨: {last_row['MiddleBand']:.2f}, 下轨: {last_row['LowerBand']:.2f}\n"
-    report += f"- 当前价格: {last_row['close']:.2f}\n"
-    
-    if last_row['close'] > last_row['UpperBand']:
-        report += "- ⚠️ 价格突破上轨，警惕超买风险\n"
-    elif last_row['close'] < last_row['LowerBand']:
-        report += "- ✅ 价格跌破下轨，可能有超跌反弹机会\n"
-    else:
-        report += "- 价格在布林带通道内运行\n"
-    
-    # 成交量分析
-    report += f"\n**成交量分析**:\n"
-    report += f"- 今日成交量: {last_row['volume']:,}手\n"
-    report += f"- 成交量变化: {last_row['VolumeChange']*100:.2f}%\n"
-    
-    if last_row['VolumeChange'] > 0.5:
-        report += "- ✅ 成交量显著放大，可能有主力资金介入\n"
-    elif last_row['VolumeChange'] < -0.3:
-        report += "- ⚠️ 成交量明显萎缩，市场参与度降低\n"
-    
-    # 显示最近买卖信号
-    buy_signals = analysis_data[analysis_data['BuySignalDate'].notnull()]
-    sell_signals = analysis_data[analysis_data['SellSignalDate'].notnull()]
-    
-    if not buy_signals.empty:
-        last_buy = buy_signals.iloc[-1]['date'].strftime('%Y-%m-%d')
-        report += f"\n**最近买入信号**: {last_buy}\n"
-    
-    if not sell_signals.empty:
-        last_sell = sell_signals.iloc[-1]['date'].strftime('%Y-%m-%d')
-        report += f"**最近卖出信号**: {last_sell}\n"
+    # 3. 选股建议
+    if sector_data is not None and leading_stocks is not None:
+        selected_stocks = stock_selection_engine(sector_data, leading_stocks)
+        if selected_stocks:
+            report += f"\n### 💡 智能选股推荐\n"
+            report += f"根据板块资金和龙头股表现，推荐关注以下股票：\n"
+            report += f"- {', '.join(selected_stocks)}\n"
+            report += f"\n点击右侧按钮进行详细分析 →"
     
     return report
 
-# 生成买卖点建议
-def generate_trade_recommendation(analysis_data, sector_data, leading_stocks):
-    """生成买卖点建议"""
-    if analysis_data is None or analysis_data.empty:
-        return "无有效数据生成建议"
-    
-    last_row = analysis_data.iloc[-1]
-    report_date = last_row['date'].strftime('%Y-%m-%d')
-    recommendation = ""
-    
-    # 买点判断逻辑
-    buy_signals = []
-    
-    # 1. 技术面信号
-    if last_row['GoldenCross']:
-        buy_signals.append(f"MACD金叉（{report_date}）")
-    if last_row['RSI'] < 35:
-        buy_signals.append(f"RSI超卖（{report_date}）")
-    if last_row['close'] < last_row['LowerBand']:
-        buy_signals.append(f"布林带下轨支撑（{report_date}）")
-    if last_row['VolumeChange'] > 0.5 and last_row['close'] > last_row['open']:
-        buy_signals.append(f"放量上涨（{report_date}）")
-    
-    # 2. 板块热点
-    if sector_data is not None and not sector_data.empty:
-        buy_signals.append("所属板块资金流入")
-    
-    # 3. 市场情绪 - 龙头股表现
-    if leading_stocks is not None and not leading_stocks.empty:
-        # 尝试获取涨跌幅列
-        change_col = None
-        for col in ['涨跌幅', '涨幅', '最新涨跌幅']:
-            if col in leading_stocks.columns:
-                change_col = col
-                break
-        
-        if change_col:
-            avg_change = leading_stocks[change_col].mean()
-            if avg_change > 3:
-                buy_signals.append("市场情绪高涨")
-    
-    # 卖点判断逻辑
-    sell_signals = []
-    
-    # 1. 技术面信号
-    if last_row['DeathCross']:
-        sell_signals.append(f"MACD死叉（{report_date}）")
-    if last_row['RSI'] > 70:
-        sell_signals.append(f"RSI超买（{report_date}）")
-    if last_row['close'] > last_row['UpperBand']:
-        sell_signals.append(f"布林带上轨压力（{report_date}）")
-    if last_row['VolumeChange'] > 0.5 and last_row['close'] < last_row['open']:
-        sell_signals.append(f"放量下跌（{report_date}）")
-    
-    # 2. 板块资金流出
-    if sector_data is None or sector_data.empty:
-        sell_signals.append("所属板块资金流出")
-    
-    # 3. 急拉信号
-    if (last_row['close'] - last_row['open']) / last_row['open'] > 0.07:
-        sell_signals.append(f"单日急涨（{report_date}）")
-    
-    # 综合判断
-    if buy_signals and not sell_signals:
-        recommendation = "✅ **强烈买入**: " + ", ".join(buy_signals)
-    elif buy_signals and sell_signals:
-        recommendation = "⚠️ **谨慎买入**: " + ", ".join(buy_signals) + " | 风险因素: " + ", ".join(sell_signals)
-    elif not buy_signals and sell_signals:
-        recommendation = "⛔ **建议卖出**: " + ", ".join(sell_signals)
-    else:
-        recommendation = "➖ **持有观望**: 无明显买卖信号"
-    
-    return recommendation
-
 # 高级AI分析函数
 def advanced_ai_analysis(stock_data, sector_data, leading_stocks, user_query):
-    """使用DeepSeek API进行高级分析"""
     api_url = "https://api.deepseek.com/v1/chat/completions"
     
-    # 验证API密钥是否设置
     if not DEEPSEEK_API_KEY:
         return "错误：缺少DeepSeek API密钥"
     
     # 准备数据摘要
-    data_summary = ""
+    data_summary = "" if stock_data is None else f"""
+    股票技术数据:
+    {stock_data[['date', 'close', 'MA5', 'MA20', 'MACD']].tail(3).to_string()}
+    """
     
-    if stock_data is not None and not stock_data.empty:
-        data_summary += f"### 股票技术数据摘要:\n{stock_data[['date', 'close', 'MA5', 'MA20', 'MACD', 'RSI']].tail(3).to_string()}\n\n"
+    if sector_data is not None:
+        data_summary += f"""
+        板块资金流向:
+        {sector_data.head(3).to_string()}
+        """
     
-    if sector_data is not None and not sector_data.empty:
-        data_summary += f"### 板块资金流向:\n{sector_data.head(3).to_string()}\n\n"
-    
-    if leading_stocks is not None and not leading_stocks.empty:
-        data_summary += f"### 龙头股表现:\n{leading_stocks.head(3).to_string()}\n\n"
+    if leading_stocks is not None:
+        data_summary += f"""
+        龙头股表现:
+        {leading_stocks.head(3).to_string()}
+        """
     
     # 准备请求数据
     prompt = f"""
-    你是一位顶尖的股票交易员和量化分析师，请根据以下市场数据和用户查询进行专业分析：
+    作为专业股票分析师，请基于以下市场数据和用户查询进行综合分析：
     
     {data_summary}
     
     用户查询: {user_query}
     
-    请从以下几个维度进行分析：
-    1. 技术面分析：结合MACD、RSI、均线系统、布林带等指标
-    2. 资金面分析：板块资金流向、主力资金动向
-    3. 市场情绪：涨停板数量、龙头股表现、题材热度
-    4. 买卖点建议：根据"买在起涨点，卖在急拉时"的原则给出具体建议
-    5. 风险提示：潜在风险因素和仓位管理建议
+    请从以下维度全面分析：
+    1. 宏观市场：当前市场趋势、资金流向、热点板块
+    2. 技术分析：关键指标解读（MACD、均线系统）
+    3. 资金动向：主力资金流向、北向资金动态
+    4. 热点追踪：涨停板数量、龙头股表现
+    5. 操作策略：具体买卖点建议和仓位管理
     
-    请用专业但易懂的语言撰写报告，包含具体数据支持。
+    要求：专业严谨但易于理解，给出明确结论。
     """
     
     headers = {
@@ -392,11 +347,11 @@ def advanced_ai_analysis(stock_data, sector_data, leading_stocks, user_query):
     payload = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": "你是顶尖的量化交易员，精通技术分析、资金流向分析和市场情绪把握，擅长捕捉板块轮动和龙头股机会。"},
+            {"role": "system", "content": "你是资深股票分析师，精通技术分析、资金流向和市场情绪把握。"},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.25,
-        "max_tokens": 1500
+        "temperature": 0.3,
+        "max_tokens": 2000
     }
     
     try:
@@ -407,13 +362,9 @@ def advanced_ai_analysis(stock_data, sector_data, leading_stocks, user_query):
             headers=headers
         )
         
-        if response is not None and response.status_code == 200:
+        if response and response.status_code == 200:
             return response.json()['choices'][0]['message']['content']
-        elif response is not None:
-            error_detail = response.text if hasattr(response, 'text') else str(response)
-            return f"API返回错误: {response.status_code} - {error_detail[:200]}"
-        else:
-            return "API请求失败，请检查网络连接或代理设置"
+        return "AI分析请求失败"
     except Exception as e:
         return f"获取AI推荐失败: {str(e)}"
 
@@ -428,7 +379,7 @@ def main():
     )
     
     st.title("🚀 智能选股系统")
-    st.caption(f"最后更新: {current_time} | 使用AKShare和DeepSeek API")
+    st.caption(f"最后更新: {current_time} | 实时市场分析")
     
     # 初始化session state
     if 'messages' not in st.session_state:
@@ -440,17 +391,11 @@ def main():
     if 'stock_data' not in st.session_state:
         st.session_state.stock_data = None
     
-    # 显示API密钥状态
-    if DEEPSEEK_API_KEY:
-        st.sidebar.success("DeepSeek API密钥已设置")
-    else:
-        st.sidebar.error("DeepSeek API密钥未设置")
-    
     # 侧边栏设置
     with st.sidebar:
         st.header("智能选股设置")
         
-        # 代理设置选项
+        # 代理设置
         st.subheader("网络设置")
         use_proxy = st.checkbox("启用代理", value=False)
         proxy_address = st.text_input("代理地址 (格式: http://ip:port)", "http://127.0.0.1:7890")
@@ -465,56 +410,112 @@ def main():
             PROXY_SETTINGS = None
             st.info("不使用代理")
         
-        st.markdown("### 常见代理端口")
-        st.markdown("""
-        - Clash: `7890`
-        - V2Ray: `10809`
-        - Shadowsocks: `1080`
-        - Qv2ray: `8889`
-        """)
-        
         st.divider()
         
         # 市场数据获取
         st.subheader("市场数据")
-        if st.button("获取板块资金流向"):
-            with st.spinner("获取板块数据中..."):
+        if st.button("📊 刷新市场数据"):
+            with st.spinner("获取最新市场数据中..."):
                 st.session_state.sector_data = get_sector_fund_flow()
-        
-        if st.button("获取龙头股信息"):
-            with st.spinner("获取龙头股数据中..."):
                 st.session_state.leading_stocks = get_leading_stocks()
+                st.success("市场数据已更新！")
         
         st.divider()
         
         # 自选股管理
         st.subheader("自选股管理")
         new_stock = st.text_input("添加股票代码", "000001")
-        if st.button("添加到自选"):
+        if st.button("➕ 添加到自选"):
             if new_stock and new_stock not in st.session_state.watchlist:
                 st.session_state.watchlist.append(new_stock)
                 st.success(f"已添加 {new_stock} 到自选股")
         
         if st.session_state.watchlist:
-            selected = st.selectbox("自选股列表", st.session_state.watchlist)
-            if st.button("分析选中股票"):
-                st.session_state.current_stock = selected
+            st.write("自选股列表:")
+            for stock in st.session_state.watchlist:
+                st.code(stock)
+            
+            if st.button("🔍 分析全部自选股"):
+                st.session_state.multianalysis = True
+                st.session_state.stocks_to_analyze = st.session_state.watchlist.copy()
     
-    # 主界面 - 对话区域
-    st.subheader("智能选股助手")
+    # 主界面
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        # 市场全景分析
+        if st.button("🌐 市场全景分析", use_container_width=True):
+            market_report = market_overview_analysis()
+            st.markdown(market_report)
+            
+            # 显示选股结果
+            if 'sector_data' in st.session_state and 'leading_stocks' in st.session_state:
+                selected_stocks = stock_selection_engine(
+                    st.session_state.sector_data, 
+                    st.session_state.leading_stocks
+                )
+                
+                if selected_stocks:
+                    st.subheader("📈 智能选股结果")
+                    if st.button("分析推荐股票", type="primary"):
+                        st.session_state.multianalysis = True
+                        st.session_state.stocks_to_analyze = selected_stocks
+        
+        # 多股分析展示
+        if hasattr(st.session_state, 'multianalysis') and st.session_state.multianalysis:
+            if hasattr(st.session_state, 'stocks_to_analyze'):
+                results = analyze_multiple_stocks(st.session_state.stocks_to_analyze)
+                
+                st.subheader("📊 多股分析结果")
+                for stock in results:
+                    with st.expander(f"{stock['code']} - {stock['recommendation'].split(':')[0]}"):
+                        st.write(stock['recommendation'])
+                        st.write(f"最新价: {stock['last_close']}")
+                        
+                        if st.button(f"详细分析 {stock['code']}"):
+                            st.session_state.current_stock = stock['code']
+                            st.session_state.multianalysis = False
+                            st.experimental_rerun()
+    
+    with col2:
+        st.subheader("实时市场状态")
+        
+        # 实时显示板块资金
+        if 'sector_data' in st.session_state and st.session_state.sector_data is not None:
+            st.write("**🔥 资金流入板块**")
+            for i, row in st.session_state.sector_data.head(3).iterrows():
+                sector_name = row.iloc[0]
+                amount = row.get('净额', 0)
+                if isinstance(amount, (int, float)):
+                    amount = f"{amount/100000000:.2f}亿"
+                st.info(f"{sector_name}: {amount}")
+        
+        # 实时显示龙头股
+        if 'leading_stocks' in st.session_state and st.session_state.leading_stocks is not None:
+            st.write("**🚀 今日龙头股**")
+            for i, row in st.session_state.leading_stocks.head(3).iterrows():
+                code = row.iloc[0]
+                name = row.iloc[1] if len(row) > 1 else ""
+                change = row.iloc[2] if len(row) > 2 else ""
+                st.success(f"{code} {name}: {change}")
+    
+    # 聊天交互区域
+    st.divider()
+    st.subheader("💬 智能选股助手")
     
     # 显示历史消息
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
     
-    # 用户输入
-    if prompt := st.chat_input("请输入股票代码或选股策略..."):
+    # 用户输入处理
+    if prompt := st.chat_input("请输入股票代码或分析指令..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         
         with st.chat_message("user"):
             st.markdown(prompt)
         
+        response = ""
         stock_pattern = r'(\d{6})'
         matches = re.findall(stock_pattern, prompt)
         
@@ -522,22 +523,35 @@ def main():
             stock_code = matches[0]
             st.session_state.current_stock = stock_code
             response = f"已选择股票 {stock_code}，正在分析中..."
-        elif "分析自选" in prompt:
-            if st.session_state.watchlist:
-                response = f"开始分析自选股：{', '.join(st.session_state.watchlist)}..."
-            else:
-                response = "自选股列表为空，请先添加股票"
-        elif "板块" in prompt or "热点" in prompt:
-            response = "正在分析当前板块热点和资金流向..."
-        elif "龙头" in prompt:
-            response = "正在分析当前市场龙头股表现..."
+        elif "选股" in prompt or "推荐" in prompt:
+            # 执行选股逻辑
+            with st.spinner("执行智能选股策略中..."):
+                st.session_state.sector_data = get_sector_fund_flow()
+                st.session_state.leading_stocks = get_leading_stocks()
+                
+                if st.session_state.sector_data is not None and st.session_state.leading_stocks is not None:
+                    selected_stocks = stock_selection_engine(
+                        st.session_state.sector_data, 
+                        st.session_state.leading_stocks
+                    )
+                    
+                    if selected_stocks:
+                        response = f"智能选股结果: {', '.join(selected_stocks)}\n\n点击下方按钮进行详细分析"
+                        st.session_state.multianalysis = True
+                        st.session_state.stocks_to_analyze = selected_stocks
+                    else:
+                        response = "选股策略未找到合适股票"
+                else:
+                    response = "获取市场数据失败，无法选股"
+        elif "行情" in prompt or "市场" in prompt:
+            response = "正在生成市场全景分析..."
         else:
-            response = "正在分析市场情况..."
+            response = "正在处理您的请求..."
         
         with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            message_placeholder.markdown(response)
+            st.markdown(response)
             
+            # 如果有当前股票，进行分析
             if hasattr(st.session_state, 'current_stock'):
                 with st.spinner("获取股票数据中..."):
                     stock_data = get_stock_data(
@@ -554,8 +568,9 @@ def main():
                         sector_data = st.session_state.get('sector_data', None)
                         leading_stocks = st.session_state.get('leading_stocks', None)
                         
-                        tech_report = generate_technical_report(analysis_data)
-                        trade_recommendation = generate_trade_recommendation(analysis_data, sector_data, leading_stocks)
+                        trade_recommendation = generate_trade_recommendation(
+                            analysis_data, sector_data, leading_stocks
+                        )
                         
                         with st.spinner("AI深度分析中..."):
                             ai_analysis = advanced_ai_analysis(
@@ -565,20 +580,12 @@ def main():
                                 f"请分析股票{st.session_state.current_stock}的投资机会"
                             )
                         
-                        # 绘制基础K线图
-                        st.subheader(f"{st.session_state.current_stock} 价格走势")
-                        st.line_chart(analysis_data.set_index('date')['close'])
+                        # 显示结果
+                        full_response = f"## {st.session_state.current_stock} 深度分析\n\n"
+                        full_response += f"###  💡 操作建议\n{trade_recommendation}\n\n"
+                        full_response += f"###  🤖 AI专业分析\n{ai_analysis}\n\n"
                         
-                        full_response = f"## {st.session_state.current_stock} 深度分析报告\n\n"
-                        full_response += f"### 💡 买卖点建议\n{trade_recommendation}\n\n"
-                        full_response += tech_report + "\n\n"
-                        full_response += f"### 🤖 AI专业分析\n{ai_analysis}\n\n"
-                        
-                        message_placeholder.markdown(full_response)
-                    else:
-                        message_placeholder.error("技术分析失败")
-                else:
-                    message_placeholder.error("股票数据获取失败")
+                        st.markdown(full_response)
         
         st.session_state.messages.append({"role": "assistant", "content": response})
 
