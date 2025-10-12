@@ -3,7 +3,6 @@ import sys
 import time
 import requests
 import pandas as pd
-import akshare as as pd
 import akshare as ak
 import streamlit as st
 from datetime import datetime, timedelta
@@ -20,7 +19,7 @@ MAX_RETRIES = 3
 RETRY_DELAY = 2
 
 # 直接在这里设置您的API密钥
-DEEPSEEK_API_KEY = "sk-e9e5e5b7565b4f809deb7565b4f809de1c8d53c22fa1b"
+DEEPSEEK_API_KEY = "sk-e9e5e5b7565b4f809de1c8d53c22fa1b"
 
 # 带代理和重试机制的请求函数
 def robust_request(url, method='get', params=None, json=None, headers=None):
@@ -42,8 +41,6 @@ def robust_request(url, method='get', params=None, json=None, headers=None):
             return response
         except (requests.exceptions.RequestException, requests.exceptions.Timeout) as e:
             st.error(f"请求失败 (尝试 {attempt+1}/{MAX_RETRIES}): {str(e)}")
-            
-            # {str(e)}")
             
             # 如果是代理错误，建议用户检查代理设置
             if "ProxyError" in str(e) and PROXY_SETTINGS:
@@ -100,7 +97,7 @@ def analyze_stock(df):
         df['Histogram'] = df['MACD'] - df['Signal']
         
         # 计算RSI
-        delta = df['close'].diff        delta = df['close'].diff()
+        delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).fillna(0).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).fillna(0).rolling(window=14).mean()
         rs = gain / (loss + 1e-10)  # 防止除以零
@@ -191,8 +188,6 @@ def main():
         start_date = st.date_input("开始日期", datetime.now() - timedelta(days=180))
         end_date = st.date_input("结束日期", datetime.now())
         
-        # ", datetime.now())
-        
         # 代理设置选项
         st.subheader("网络设置")
         use_proxy = st.checkbox("启用代理", value=False)  # 默认禁用代理
@@ -241,9 +236,9 @@ def main():
             analysis_data = analyze_stock(stock_data.copy())
             
             if analysis_data is not None and not analysis_data.empty:
-                # 显示技术指标数据
+                # 显示技术指标数据 - 修复了这里的语法错误
                 display_df = analysis_data[['date', 'close', 'MA5', 'MA20', 'MACD', 'RSI']].copy()
-                display_df.columns = ['日期', '收盘价', '5日均线', '20日均 '5日均线', '20日均线', 'MACD', 'RSI']
+                display_df.columns = ['日期', '收盘价', '5日均线', '20日均线', 'MACD', 'RSI']
                 st.dataframe(display_df)
                 
                 # 绘制价格和MA线
