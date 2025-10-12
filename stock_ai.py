@@ -3,24 +3,23 @@ import sys
 import time
 import requests
 import pandas as pd
-import akshare as pd
 import akshare as ak
 import streamlit as st
 from datetime import datetime, timedelta
 
 # 获取当前时间
-current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S-%d %H:%M:%S")
 
-# 科学上网代理配置 - 请根据您的实际代理设置修改
+# 代理配置
 PROXY_SETTINGS = {
-    'http': 'http://127.0.0.1:7890',  # 常用Clash/V2Ray默认端口
+    'http': 'http://127.0.0.1:7890', 
     'https': 'http://127.0.0.1:7890'
 }
 
-# 全局请求设置# 全局请求设置
-REQUEST_TIMEOUT = 25  # 超时时间延长到25秒
-MAX_RETRIES = 3       # 最大重试次数
-RETRY_DELAY = 1.5     # 重试间隔(秒)
+# 全局请求设置
+REQUEST_TIMEOUT = 25
+MAX_RETRIES = 3
+RETRY_DELAY = 1.5
 
 # 带代理和重试机制的请求函数
 def robust_request(url, method='get', params=None, json=None, headers=None):
@@ -30,15 +29,20 @@ def robust_request(url, method='get', params=None, json=None, headers=None):
             response = requests.request(
                 method=method,
                 url=url,
+               method,
+                url=url,
                 params=params,
                 json=json,
                 headers=headers,
-                proxies=PROXY_SETTINGS,  # 使用代理
-                timeout=REQUEST_TIMEOUT  # 超时设置
+                proxies=PROXY_SETTINGS,
+                timeout=REQUEST_TIMEOUT
             )
-            response.raise_for_status()  # 检查HTTP错误
+            response.raise_for_status()
+ )
+            response.raise_for_status()
             return response
         except (requests.exceptions.RequestException, requests.exceptions.Timeout) as e:
+            print.Timeout) as e:
             print(f"请求失败 (尝试 {attempt+1}/{MAX_RETRIES}): {str(e)}")
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_DELAY)
@@ -46,11 +50,11 @@ def robust_request(url, method='get', params=None, json=None, headers=None):
                 raise Exception(f"API请求失败: {str(e)}")
     return None
 
-# 获取股票数据函数 - 使用股票数据函数 - 使用代理
+# 获取股票数据函数
+def get_stock_data数据函数
 def get_stock_data(stock_code, start_date, end_date):
-    """使用AKShare获取股票数据，支持代理"""
+    """使用AKShare获取股票数据"""
     try:
-        # 使用AKShare获取数据
         stock_df = ak.stock_zh_a_hist(
             symbol=stock_code, 
             period="daily", 
@@ -58,32 +62,45 @@ def get_stock_data(stock_code, start_date, end_date):
             end_date=end_date,
             adjust="qfq"
         )
+        # 重命名列为英文
+        stock_df = stock_df.rename(columns={
+            '日期': 'date',
+            '开盘': 'open',
+            '收盘': 'close',
+            '最高': 'high',
+            '最低': 'low',
+            '成交量': 'volume',
+            '成交额': 'amount',
+            '振幅': 'amplitude',
+            '涨跌幅': 'change_percent',
+            '涨跌额': 'change_amount',
+            '换手率': 'turnover_rate'
+        })
         return stock_df
     except Exception as e:
         st.error(f"获取股票数据失败: {str(e)}")
         return None
 
 # 技术指标分析函数
+def analyze_stock指标分析函数
 def analyze_stock(df):
     """计算技术指标"""
     if df is None or df.empty:
         return None
     
     # 计算移动平均线
-    df['MA5'] = df['收盘'].rolling(window=5).mean()
-    df['MA20'] = df['收盘'].rolling(window=20).mean()
+    df['MA5'] = df['close'].rolling(window=5).mean()
+    df['MA20'] = df['close'].rolling(window=20).mean()
     
     # 计算MACD
-    exp12 = df['收盘'].ewm(span=12, adjust=False).mean()
-    exp26 = df['收盘'].ewm(span=26, adjust=False).mean()
+    exp12 = df['close'].ewm(span=12, adjust=False).mean()
+    exp26 = df['close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = exp12 - exp26
     df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['Histogram'] = df['MACD'] - df['Signal']
     
-   '] - df['Signal']
-    
     # 计算RSI
-    delta = df['收盘'].diff()
+    delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
@@ -91,19 +108,22 @@ def analyze_stock(df):
     
     return df.tail(30)  # 返回最近30天数据
 
-# AI推荐函数 - 使用DeepSeek API
-def get_ai_recommendation(_ai_recommendation(analysis_data):
+# AI推荐函数
+def get_ai_recommendation(analysis_data):
     """使用DeepSeek API获取AI推荐"""
     api_url = "https://api.deepseek.com/v1/chat/completions"
-    api_key = st.secrets["sk-a1f3b3b7c8ab486aa054f333bb4bd834"]  # 从Streamlit secrets获取API密钥
+    api_key = st.secrets.get("sk-a1f3b3b7c8ab486aa054f333bb4bd834", os.getenv("sk-a1f3b3b7c8ab486aa054f333bb4bd834", ""))
+    
+    if not api_key:
+        return "错误：缺少DeepSeek API密钥"
     
     # 准备请求数据
     prompt = f"""
     作为金融分析师，请根据以下股票技术指标数据提供专业分析：
-    {analysis_data.to_string()}
+    {analysis_data[['date', 'close', 'MA5', 'MA20', 'MACD', 'Signal', 'Histogram', 'RSI']].to_string()}
     
     请包含以下内容：
-    1. 当前趋势分析（. 当前趋势分析（短期/中期）
+    1. 当前趋势分析（短期/中期）
     2. 关键指标解读（MACD, RSI）
     3. 买卖建议（买入/持有/卖出）
     4. 风险提示
@@ -111,7 +131,6 @@ def get_ai_recommendation(_ai_recommendation(analysis_data):
     
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
@@ -143,6 +162,7 @@ def get_ai_recommendation(_ai_recommendation(analysis_data):
 def main():
     st.set_page_config(
         page_title="智能选股系统", 
+        page_icon股系统", 
         page_icon="📈", 
         layout="wide"
     )
@@ -167,7 +187,6 @@ def main():
         if use_proxy:
             PROXY_SETTINGS = {
                 'http': proxy_address,
-                'https': proxy proxy_address,
                 'https': proxy_address
             }
         else:
@@ -176,12 +195,11 @@ def main():
         st.info(f"当前代理设置: {PROXY_SETTINGS if use_proxy else '无'}")
     
     # 主界面
-    if st.button界面
     if st.button("分析股票"):
         with st.spinner("获取数据中..."):
             stock_data = get_stock_data(
                 stock_code, 
-                start_date.strftime("%Y%m%d"),.strftime("%Y%m%d"), 
+                start_date.strftime("%Y%m%d"), 
                 end_date.strftime("%Y%m%d")
             )
         
@@ -198,16 +216,29 @@ def main():
             
             if analysis_data is not None:
                 # 显示技术指标数据
-                st.dataframe(analysis_data[['日期', '收盘', 'MA5', 'MA20', 'MACD', 'RSI']])
+                st.dataframe(analysis_data[['date', 'close', 'MA5', 'MA20', 'MACD', 'RSI']].rename(columns={
+                    'date': '日期',
+                    'close': '收盘价',
+                    'MA5': '5日均线',
+                    'MA20': '20日均线'
+                }))
                 
                 # 绘制价格和MA线
-                st.line_chart(analysis_data.set_index('日期')[['收盘', 'MA5', 'MA20']])
+                st.line_chart(analysis_data.set_index('date')[['close', 'MA5', 'MA20']].rename(columns={
+                    'close': '收盘价',
+                    'MA5': '5日均线',
+                    'MA20': '20日均线'
+                }))
                 
                 # 显示MACD图表
-                st.line_chart(analysis_data.set_index('日期')[['MACD', 'Signal']])
+                st.line_chart(analysis_data.set_index('date')[['MACD', 'Signal']].rename(columns={
+                    'MACD': 'MACD线',
+                    'Signal': '信号线'
+                }))
                 
                 # AI推荐
                 with st.spinner("AI分析中..."):
+                   inner("AI分析中..."):
                     recommendation = get_ai_recommendation(analysis_data)
                 
                 st.subheader("AI推荐")
@@ -220,5 +251,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
