@@ -21,6 +21,9 @@ REQUEST_TIMEOUT = 25
 MAX_RETRIES = 3
 RETRY_DELAY = 1.5
 
+# 直接在这里设置您的API密钥
+DEEPSEEK_API_KEY = "sk-e9e5e5b7565b4f809de1c8d53c22fa1b"
+
 # 带代理和重试机制的请求函数
 def robust_request(url, method='get', params=None, json=None, headers=None):
     """带代理支持、超时设置和自动重试的HTTP请求函数"""
@@ -101,14 +104,15 @@ def analyze_stock(df):
         st.error(f"技术分析失败: {str(e)}")
         return None
 
-# AI推荐函数
+# AI推荐函数 - 使用直接设置的API密钥
 def get_ai_recommendation(analysis_data):
     """使用DeepSeek API获取AI推荐"""
     api_url = "https://api.deepseek.com/v1/chat/completions"
-    api_key = st.secrets.get("sk-e9e5e5b7565b4f809de1c8d53c22fa1b", os.getenv("sk-e9e5e5b7565b4f809de1c8d53c22fa1b", ""))
     
-    if not api_key:
-        return "错误：缺少DeepSeek API密钥"
+    # 验证API密钥是否设置
+    if not DEEPSEEK_API_KEY:
+        st.error("错误：缺少DeepSeek API密钥")
+        return "请设置有效的DeepSeek API密钥"
     
     # 准备请求数据
     prompt = f"""
@@ -123,7 +127,7 @@ def get_ai_recommendation(analysis_data):
     """
     
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
         "Content-Type": "application/json"
     }
     
@@ -148,8 +152,10 @@ def get_ai_recommendation(analysis_data):
             return response.json()['choices'][0]['message']['content']
         else:
             error_detail = response.text if hasattr(response, 'text') else str(response)
-            return f"API返回错误: {response.status_code} - {error_detail}"
+            st.error(f"DeepSeek API错误: {response.status_code} - {error_detail[:200]}")
+            return f"API返回错误: {response.status_code} - {error_detail[:200]}"
     except Exception as e:
+        st.error(f"获取AI推荐失败: {str(e)}")
         return f"获取AI推荐失败: {str(e)}"
 
 # Streamlit应用界面
@@ -164,6 +170,12 @@ def main():
     
     st.title("🚀 智能选股系统")
     st.caption(f"最后更新: {current_time} | 使用AKShare和DeepSeek API")
+    
+    # 显示API密钥状态
+    if DEEPSEEK_API_KEY:
+        st.sidebar.success("DeepSeek API密钥已设置")
+    else:
+        st.sidebar.error("DeepSeek API密钥未设置")
     
     # 侧边栏设置
     with st.sidebar:
@@ -240,4 +252,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
