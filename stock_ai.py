@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 # 获取当前时间
 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-# 代理配置
+# 代理配置 - 定义为可变对象以便在函数内部修改
 PROXY_SETTINGS = {
     'http': 'http://127.0.0.1:7890', 
     'https': 'http://127.0.0.1:7890'
@@ -26,7 +26,6 @@ def robust_request(url, method='get', params=None, json=None, headers=None):
     """带代理支持、超时设置和自动重试的HTTP请求函数"""
     for attempt in range(MAX_RETRIES):
         try:
-            # 使用关键字参数调用requests.request
             response = requests.request(
                 method=method,
                 url=url,
@@ -92,9 +91,9 @@ def analyze_stock(df):
         
         # 计算RSI
         delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
+        gain = (delta.where(delta > 0, 0)).fillna(0).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).fillna(0).rolling(window=14).mean()
+        rs = gain / (loss + 1e-10)  # 防止除以零
         df['RSI'] = 100 - (100 / (1 + rs))
         
         return df.tail(30)  # 返回最近30天数据
@@ -148,12 +147,15 @@ def get_ai_recommendation(analysis_data):
         if response and response.status_code == 200:
             return response.json()['choices'][0]['message']['content']
         else:
-            return f"API返回错误: {response.text if response else '无响应'}"
+            error_detail = response.text if hasattr(response, 'text') else str(response)
+            return f"API返回错误: {response.status_code} - {error_detail}"
     except Exception as e:
         return f"获取AI推荐失败: {str(e)}"
 
 # Streamlit应用界面
 def main():
+    global PROXY_SETTINGS  # 在函数开头声明全局变量
+    
     st.set_page_config(
         page_title="智能选股系统", 
         page_icon="📈", 
@@ -173,10 +175,11 @@ def main():
         # 代理设置选项
         st.subheader("网络设置")
         use_proxy = st.checkbox("启用代理", value=True)
+        
+        # 在global声明后使用PROXY_SETTINGS
         proxy_address = st.text_input("代理地址", PROXY_SETTINGS['http'])
         
         # 更新代理设置
-        global PROXY_SETTINGS
         if use_proxy:
             PROXY_SETTINGS = {
                 'http': proxy_address,
@@ -196,7 +199,7 @@ def main():
                 end_date.strftime("%Y%m%d")
             )
         
-        if stock_data is not None:
+        if stock_data is not None and not stock_data.empty:
             st.success("数据获取成功!")
             
             # 显示原始数据
@@ -207,7 +210,7 @@ def main():
             st.subheader("技术分析")
             analysis_data = analyze_stock(stock_data.copy())
             
-            if analysis_data is not None:
+            if analysis_data is not None and not analysis_data.empty:
                 # 显示技术指标数据
                 display_df = analysis_data[['date', 'close', 'MA5', 'MA20', 'MACD', 'RSI']].copy()
                 display_df.columns = ['日期', '收盘价', '5日均线', '20日均线', 'MACD', 'RSI']
@@ -231,9 +234,9 @@ def main():
                 st.markdown(f"**股票代码: {stock_code}**")
                 st.markdown(recommendation)
             else:
-                st.warning("技术分析失败")
+                st.warning("技术分析失败 - 请检查数据格式")
         else:
-            st.error("无法获取股票数据")
+            st.error("无法获取股票数据 - 请检查股票代码和日期范围")
 
 if __name__ == "__main__":
     main()
