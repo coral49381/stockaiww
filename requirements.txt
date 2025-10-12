@@ -1,4 +1,8 @@
-    akshare
-   pandas
-   streamlit
-   requests
+streamlit>=1.33.0
+akshare>=1.12.76
+plotly>=5.22.0
+pandas>=2.0.0
+numpy>=1.26.0
+requests>=2.31.0
+python-dateutil>=2.9.0
+lxml>=5.0.0
